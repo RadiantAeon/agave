@@ -1,6 +1,6 @@
 use {
     agave_geyser_plugin_interface::geyser_plugin_interface::GeyserPlugin,
-    jsonrpc_core::{ErrorCode, Result as JsonRpcResult},
+    jsonrpsee_types::{ErrorCode, ErrorObject, ErrorObjectOwned},
     libloading::Library,
     log::*,
     std::{
@@ -9,6 +9,9 @@ use {
     },
     tokio::sync::oneshot::Sender as OneShotSender,
 };
+
+/// Result type for admin RPC operations
+pub type JsonRpcResult<T> = std::result::Result<T, ErrorObjectOwned>;
 
 #[derive(Debug)]
 pub struct LoadedGeyserPlugin {
@@ -129,11 +132,11 @@ impl GeyserPluginManager {
         // First load plugin
         let (mut new_plugin, new_config_file) =
             load_plugin_from_config(geyser_plugin_config_file.as_ref()).map_err(|e| {
-                jsonrpc_core::Error {
-                    code: ErrorCode::InvalidRequest,
-                    message: format!("Failed to load plugin: {e}"),
-                    data: None,
-                }
+                ErrorObject::owned(
+                    ErrorCode::InvalidRequest.code(),
+                    format!("Failed to load plugin: {e}"),
+                    None::<()>,
+                )
             })?;
 
         // Then see if a plugin with this name already exists. If so, abort
@@ -142,14 +145,14 @@ impl GeyserPluginManager {
             .iter()
             .any(|plugin| plugin.name().eq(new_plugin.name()))
         {
-            return Err(jsonrpc_core::Error {
-                code: ErrorCode::InvalidRequest,
-                message: format!(
+            return Err(ErrorObject::owned(
+                ErrorCode::InvalidRequest.code(),
+                format!(
                     "There already exists a plugin named {} loaded. Did not load requested plugin",
                     new_plugin.name()
                 ),
-                data: None,
-            });
+                None::<()>,
+            ));
         }
 
         setup_logger_for_plugin(&*new_plugin.plugin)?;
@@ -157,14 +160,14 @@ impl GeyserPluginManager {
         // Call on_load and push plugin
         new_plugin
             .on_load(new_config_file, false)
-            .map_err(|on_load_err| jsonrpc_core::Error {
-                code: ErrorCode::InvalidRequest,
-                message: format!(
+            .map_err(|on_load_err| ErrorObject::owned(
+                ErrorCode::InvalidRequest.code(),
+                format!(
                     "on_load method of plugin {} failed: {on_load_err}",
                     new_plugin.name()
                 ),
-                data: None,
-            })?;
+                None::<()>,
+            ))?;
         let name = new_plugin.name().to_string();
         self.plugins.push(new_plugin);
 
@@ -179,11 +182,11 @@ impl GeyserPluginManager {
             .position(|plugin| plugin.name().eq(name))
         else {
             // If we don't find one return an error
-            return Err(jsonrpc_core::error::Error {
-                code: ErrorCode::InvalidRequest,
-                message: String::from("The plugin you requested to unload is not loaded"),
-                data: None,
-            });
+            return Err(ErrorObject::owned(
+                ErrorCode::InvalidRequest.code(),
+                String::from("The plugin you requested to unload is not loaded"),
+                None::<()>,
+            ));
         };
 
         // Unload and drop plugin and lib
@@ -203,11 +206,11 @@ impl GeyserPluginManager {
             .position(|plugin| plugin.name().eq(name))
         else {
             // If we don't find one return an error
-            return Err(jsonrpc_core::error::Error {
-                code: ErrorCode::InvalidRequest,
-                message: String::from("The plugin you requested to reload is not loaded"),
-                data: None,
-            });
+            return Err(ErrorObject::owned(
+                ErrorCode::InvalidRequest.code(),
+                String::from("The plugin you requested to reload is not loaded"),
+                None::<()>,
+            ));
         };
 
         // Unload and drop current plugin first in case plugin requires exclusive access to resource,
@@ -217,11 +220,11 @@ impl GeyserPluginManager {
         // Try to load plugin, library
         // SAFETY: It is up to the validator to ensure this is a valid plugin library.
         let (mut new_plugin, new_parsed_config_file) =
-            load_plugin_from_config(config_file.as_ref()).map_err(|err| jsonrpc_core::Error {
-                code: ErrorCode::InvalidRequest,
-                message: err.to_string(),
-                data: None,
-            })?;
+            load_plugin_from_config(config_file.as_ref()).map_err(|err| ErrorObject::owned(
+                ErrorCode::InvalidRequest.code(),
+                err.to_string(),
+                None::<()>,
+            ))?;
 
         // Then see if a plugin with this name already exists. If so, abort
         if self
@@ -229,15 +232,15 @@ impl GeyserPluginManager {
             .iter()
             .any(|plugin| plugin.name().eq(new_plugin.name()))
         {
-            return Err(jsonrpc_core::Error {
-                code: ErrorCode::InvalidRequest,
-                message: format!(
+            return Err(ErrorObject::owned(
+                ErrorCode::InvalidRequest.code(),
+                format!(
                     "There already exists a plugin named {} loaded, while reloading {name}. Did \
                      not load requested plugin",
                     new_plugin.name()
                 ),
-                data: None,
-            });
+                None::<()>,
+            ));
         }
 
         setup_logger_for_plugin(&*new_plugin.plugin)?;
@@ -251,13 +254,13 @@ impl GeyserPluginManager {
 
             // On failure, return error
             Err(err) => {
-                return Err(jsonrpc_core::error::Error {
-                    code: ErrorCode::InvalidRequest,
-                    message: format!(
+                return Err(ErrorObject::owned(
+                    ErrorCode::InvalidRequest.code(),
+                    format!(
                         "Failed to start new plugin (previous plugin was dropped!): {err}"
                     ),
-                    data: None,
-                });
+                    None::<()>,
+                ));
             }
         }
 
@@ -273,17 +276,17 @@ impl GeyserPluginManager {
 }
 
 // Initialize logging for the plugin
-fn setup_logger_for_plugin(new_plugin: &dyn GeyserPlugin) -> Result<(), jsonrpc_core::Error> {
+fn setup_logger_for_plugin(new_plugin: &dyn GeyserPlugin) -> Result<(), ErrorObjectOwned> {
     new_plugin
         .setup_logger(log::logger(), log::max_level())
-        .map_err(|setup_logger_err| jsonrpc_core::Error {
-            code: ErrorCode::InvalidRequest,
-            message: format!(
+        .map_err(|setup_logger_err| ErrorObject::owned(
+            ErrorCode::InvalidRequest.code(),
+            format!(
                 "setup_logger method of plugin {} failed: {setup_logger_err}",
                 new_plugin.name()
             ),
-            data: None,
-        })
+            None::<()>,
+        ))
 }
 
 #[derive(Debug)]
