@@ -2433,6 +2433,17 @@ pub fn verify_pubkey(input: &str) -> RpcResult<Pubkey> {
         .map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Invalid param: {e:?}"), None::<()>))
 }
 
+/// Legacy verify_pubkey for IPC admin RPC (uses jsonrpc_core error types)
+pub fn verify_pubkey_legacy(input: &str) -> jsonrpc_core::Result<Pubkey> {
+    input
+        .parse()
+        .map_err(|e| jsonrpc_core::Error {
+            code: jsonrpc_core::ErrorCode::InvalidParams,
+            message: format!("Invalid param: {e:?}"),
+            data: None,
+        })
+}
+
 fn verify_hash(input: &str) -> RpcResult<Hash> {
     input
         .parse()

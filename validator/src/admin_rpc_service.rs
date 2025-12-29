@@ -1,10 +1,10 @@
 use {
     crossbeam_channel::Sender,
-    jsonrpsee::{
-        core::{async_trait, RpcResult},
-        proc_macros::rpc,
-        server::{ServerBuilder, ServerHandle},
-        types::{ErrorCode, ErrorObject, ErrorObjectOwned},
+    jsonrpc_core::{BoxFuture, ErrorCode, MetaIoHandler, Metadata, Result},
+    jsonrpc_core_client::{transports::ipc, RpcError},
+    jsonrpc_derive::rpc,
+    jsonrpc_ipc_server::{
+        tokio::sync::oneshot::channel as oneshot_channel, RequestContext, ServerBuilder,
     },
     log::*,
     serde::{de::Deserializer, Deserialize, Serialize},
@@ -25,7 +25,7 @@ use {
     solana_gossip::contact_info::{ContactInfo, Protocol, SOCKET_ADDR_UNSPECIFIED},
     solana_keypair::{read_keypair_file, Keypair},
     solana_pubkey::Pubkey,
-    solana_rpc::rpc::verify_pubkey,
+    solana_rpc::rpc::verify_pubkey_legacy as verify_pubkey,
     solana_rpc_client_api::{config::RpcAccountIndex, custom_error::RpcCustomError},
     solana_signer::Signer,
     solana_validator_exit::Exit,
@@ -46,27 +46,6 @@ use {
     tokio::runtime::Runtime,
 };
 
-/// Result type for admin RPC
-pub type Result<T> = std::result::Result<T, ErrorObjectOwned>;
-
-/// Helper to create invalid params error
-fn invalid_params_error(message: impl Into<String>) -> ErrorObjectOwned {
-    ErrorObject::owned(
-        ErrorCode::InvalidParams.code(),
-        message.into(),
-        None::<()>,
-    )
-}
-
-/// Helper to create internal error
-fn internal_error() -> ErrorObjectOwned {
-    ErrorObject::owned(
-        ErrorCode::InternalError.code(),
-        "Internal error".to_string(),
-        None::<()>,
-    )
-}
-
 #[derive(Clone)]
 pub struct AdminRpcRequestMetadata {
     pub rpc_addr: Option<SocketAddr>,
@@ -81,6 +60,8 @@ pub struct AdminRpcRequestMetadata {
     pub rpc_to_plugin_manager_sender: Option<Sender<GeyserPluginManagerRequest>>,
 }
 
+impl Metadata for AdminRpcRequestMetadata {}
+
 impl AdminRpcRequestMetadata {
     fn with_post_init<F, R>(&self, func: F) -> Result<R>
     where
@@ -89,7 +70,7 @@ impl AdminRpcRequestMetadata {
         if let Some(post_init) = self.post_init.read().unwrap().as_ref() {
             func(post_init)
         } else {
-            Err(invalid_params_error(
+            Err(jsonrpc_core::error::Error::invalid_params(
                 "Retry once validator start up is complete",
             ))
         }
