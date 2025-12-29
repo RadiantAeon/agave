@@ -31,6 +31,8 @@ bincode = { workspace = true }
 bs58 = { workspace = true }
 crossbeam-channel = { workspace = true }
 dashmap = { workspace = true }
+futures = { workspace = true }
+hyper = { workspace = true }
 itertools = { workspace = true }
 jsonrpsee = { workspace = true }
 jsonrpsee-core = { workspace = true }
