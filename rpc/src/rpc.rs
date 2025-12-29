@@ -269,7 +269,7 @@ impl JsonRpcRequestProcessor {
 }
 
 impl JsonRpcRequestProcessor {
-    fn get_bank_with_config(&self, config: RpcContextConfig) -> Result<Arc<Bank>> {
+    fn get_bank_with_config(&self, config: RpcContextConfig) -> RpcResult<Arc<Bank>> {
         let RpcContextConfig {
             commitment,
             min_context_slot,
@@ -286,7 +286,7 @@ impl JsonRpcRequestProcessor {
         Ok(bank)
     }
 
-    fn check_if_transaction_history_enabled(&self) -> Result<()> {
+    fn check_if_transaction_history_enabled(&self) -> RpcResult<()> {
         if !self.config.enable_rpc_transaction_history {
             return Err(RpcCustomError::TransactionHistoryNotAvailable.into());
         }
@@ -531,7 +531,7 @@ impl JsonRpcRequestProcessor {
         &self,
         pubkey: Pubkey,
         config: Option<RpcAccountInfoConfig>,
-    ) -> Result<RpcResponse<Option<UiAccount>>> {
+    ) -> RpcResult<RpcResponse<Option<UiAccount>>> {
         let RpcAccountInfoConfig {
             encoding,
             data_slice,
@@ -559,7 +559,7 @@ impl JsonRpcRequestProcessor {
         &self,
         pubkeys: Vec<Pubkey>,
         config: Option<RpcAccountInfoConfig>,
-    ) -> Result<RpcResponse<Vec<Option<UiAccount>>>> {
+    ) -> RpcResult<RpcResponse<Vec<Option<UiAccount>>>> {
         let RpcAccountInfoConfig {
             encoding,
             data_slice,
@@ -603,7 +603,7 @@ impl JsonRpcRequestProcessor {
         mut filters: Vec<RpcFilterType>,
         with_context: bool,
         sort_results: bool,
-    ) -> Result<OptionalContext<Vec<RpcKeyedAccount>>> {
+    ) -> RpcResult<OptionalContext<Vec<RpcKeyedAccount>>> {
         let RpcAccountInfoConfig {
             encoding,
             data_slice: data_slice_config,
@@ -697,7 +697,7 @@ impl JsonRpcRequestProcessor {
         &self,
         addresses: Vec<Pubkey>,
         config: Option<RpcEpochConfig>,
-    ) -> Result<Vec<Option<RpcInflationReward>>> {
+    ) -> RpcResult<Vec<Option<RpcInflationReward>>> {
         let config = config.unwrap_or_default();
         let epoch_schedule = self.get_epoch_schedule();
         let first_available_block = self.get_first_available_block().await;
@@ -919,7 +919,7 @@ impl JsonRpcRequestProcessor {
         &self,
         pubkey: &Pubkey,
         config: RpcContextConfig,
-    ) -> Result<RpcResponse<u64>> {
+    ) -> RpcResult<RpcResponse<u64>> {
         let bank = self.get_bank_with_config(config)?;
         Ok(new_response(&bank, bank.get_balance(pubkey)))
     }
@@ -928,7 +928,7 @@ impl JsonRpcRequestProcessor {
         &self,
         signature: &Signature,
         commitment: Option<CommitmentConfig>,
-    ) -> Result<RpcResponse<bool>> {
+    ) -> RpcResult<RpcResponse<bool>> {
         let bank = self.bank(commitment);
         let status = bank.get_signature_status(signature);
         match status {
@@ -947,12 +947,12 @@ impl JsonRpcRequestProcessor {
         }
     }
 
-    fn get_slot(&self, config: RpcContextConfig) -> Result<Slot> {
+    fn get_slot(&self, config: RpcContextConfig) -> RpcResult<Slot> {
         let bank = self.get_bank_with_config(config)?;
         Ok(bank.slot())
     }
 
-    fn get_block_height(&self, config: RpcContextConfig) -> Result<u64> {
+    fn get_block_height(&self, config: RpcContextConfig) -> RpcResult<u64> {
         let bank = self.get_bank_with_config(config)?;
         Ok(bank.block_height())
     }
@@ -965,7 +965,7 @@ impl JsonRpcRequestProcessor {
         self.max_slots.shred_insert.load(Ordering::Relaxed)
     }
 
-    fn get_slot_leader(&self, config: RpcContextConfig) -> Result<String> {
+    fn get_slot_leader(&self, config: RpcContextConfig) -> RpcResult<String> {
         let bank = self.get_bank_with_config(config)?;
         Ok(bank.leader_id().to_string())
     }
@@ -975,7 +975,7 @@ impl JsonRpcRequestProcessor {
         commitment: Option<CommitmentConfig>,
         start_slot: Slot,
         limit: usize,
-    ) -> Result<Vec<Pubkey>> {
+    ) -> RpcResult<Vec<Pubkey>> {
         let bank = self.bank(commitment);
 
         let (mut epoch, mut slot_index) =
@@ -994,9 +994,9 @@ impl JsonRpcRequestProcessor {
                         .take(limit.saturating_sub(slot_leaders.len())),
                 );
             } else {
-                return Err(Error::invalid_params(format!(
+                return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                     "Invalid slot range: leader schedule for epoch {epoch} is unavailable"
-                )));
+                , None::<()>)));
             }
 
             epoch += 1;
@@ -1006,20 +1006,20 @@ impl JsonRpcRequestProcessor {
         Ok(slot_leaders)
     }
 
-    fn minimum_ledger_slot(&self) -> Result<Slot> {
+    fn minimum_ledger_slot(&self) -> RpcResult<Slot> {
         match self.blockstore.slot_meta_iterator(0) {
             Ok(mut metas) => match metas.next() {
                 Some((slot, _meta)) => Ok(slot),
-                None => Err(Error::invalid_request()),
+                None => Err(ErrorObject::owned(ErrorCode::InvalidRequest.code(), "Invalid request".to_string(), None::<()>)),
             },
             Err(err) => {
                 warn!("slot_meta_iterator failed: {err:?}");
-                Err(Error::invalid_request())
+                Err(ErrorObject::owned(ErrorCode::InvalidRequest.code(), "Invalid request".to_string(), None::<()>))
             }
         }
     }
 
-    fn get_transaction_count(&self, config: RpcContextConfig) -> Result<u64> {
+    fn get_transaction_count(&self, config: RpcContextConfig) -> RpcResult<u64> {
         let bank = self.get_bank_with_config(config)?;
         Ok(bank.transaction_count())
     }
@@ -1139,7 +1139,7 @@ impl JsonRpcRequestProcessor {
     fn get_vote_accounts(
         &self,
         config: Option<RpcGetVoteAccountsConfig>,
-    ) -> Result<RpcVoteAccountStatus> {
+    ) -> RpcResult<RpcVoteAccountStatus> {
         let config = config.unwrap_or_default();
 
         let filter_by_vote_pubkey = if let Some(ref vote_pubkey) = config.vote_pubkey {
@@ -1152,7 +1152,7 @@ impl JsonRpcRequestProcessor {
         let vote_accounts = bank.vote_accounts();
         let epoch_vote_accounts = bank
             .epoch_vote_accounts(bank.get_epoch_and_slot_index(bank.slot()).0)
-            .ok_or_else(Error::invalid_request)?;
+            .ok_or_else(|| ErrorObject::owned(ErrorCode::InvalidRequest.code(), "Invalid request".to_string(), None::<()>))?;
         let delinquent_validator_slot_distance = config
             .delinquent_slot_distance
             .unwrap_or(DELINQUENT_VALIDATOR_SLOT_DISTANCE);
@@ -1219,7 +1219,7 @@ impl JsonRpcRequestProcessor {
         &self,
         result: &std::result::Result<T, BlockstoreError>,
         slot: Slot,
-    ) -> Result<()> {
+    ) -> RpcResult<()> {
         if let Err(err) = result {
             debug!(
                 "check_blockstore_root, slot: {:?}, max root: {:?}, err: {:?}",
@@ -1241,12 +1241,12 @@ impl JsonRpcRequestProcessor {
         &self,
         result: &std::result::Result<T, BlockstoreError>,
         slot: Slot,
-    ) -> Result<()> {
+    ) -> RpcResult<()> {
         let first_available_block = self
             .blockstore
             .get_first_available_block()
             .unwrap_or_default();
-        let err: Error = RpcCustomError::BlockCleanedUp {
+        let err: ErrorObjectOwned = RpcCustomError::BlockCleanedUp {
             slot,
             first_available_block,
         }
@@ -1263,14 +1263,14 @@ impl JsonRpcRequestProcessor {
     fn check_bigtable_result<T>(
         &self,
         result: &std::result::Result<T, solana_storage_bigtable::Error>,
-    ) -> Result<()> {
+    ) -> RpcResult<()> {
         if let Err(solana_storage_bigtable::Error::BlockNotFound(slot)) = result {
             return Err(RpcCustomError::LongTermStorageSlotSkipped { slot: *slot }.into());
         }
         Ok(())
     }
 
-    fn check_blockstore_writes_complete(&self, slot: Slot) -> Result<()> {
+    fn check_blockstore_writes_complete(&self, slot: Slot) -> RpcResult<()> {
         if slot
             > self
                 .max_complete_transaction_status_slot
@@ -1286,7 +1286,7 @@ impl JsonRpcRequestProcessor {
         &self,
         slot: Slot,
         config: Option<RpcEncodingConfigWrapper<RpcBlockConfig>>,
-    ) -> Result<Option<UiConfirmedBlock>> {
+    ) -> RpcResult<Option<UiConfirmedBlock>> {
         self.check_if_transaction_history_enabled()?;
 
         let config = config
@@ -1333,7 +1333,7 @@ impl JsonRpcRequestProcessor {
                     encoded_block.block_time = Some(self.genesis_creation_time());
                     encoded_block.block_height = Some(0);
                 }
-                Ok::<UiConfirmedBlock, Error>(encoded_block)
+                Ok::<UiConfirmedBlock, ErrorObjectOwned>(encoded_block)
             };
             if result.is_err() {
                 if let Some(bigtable_ledger_storage) = &self.bigtable_ledger_storage {
@@ -1406,7 +1406,7 @@ impl JsonRpcRequestProcessor {
         start_slot: Slot,
         end_slot: Option<Slot>,
         config: Option<RpcContextConfig>,
-    ) -> Result<Vec<Slot>> {
+    ) -> RpcResult<Vec<Slot>> {
         let config = config.unwrap_or_default();
         let commitment = config.commitment.unwrap_or_default();
         check_is_at_least_confirmed(commitment)?;
@@ -1437,9 +1437,9 @@ impl JsonRpcRequestProcessor {
             return Ok(vec![]);
         }
         if end_slot - start_slot > MAX_GET_CONFIRMED_BLOCKS_RANGE {
-            return Err(Error::invalid_params(format!(
+            return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                 "Slot range too large; max {MAX_GET_CONFIRMED_BLOCKS_RANGE}"
-            )));
+            , None::<()>)));
         }
 
         let lowest_blockstore_slot = self
@@ -1459,8 +1459,8 @@ impl JsonRpcRequestProcessor {
                         bigtable_blocks
                     })
                     .map_err(|_| {
-                        Error::invalid_params(
-                            "BigTable query failed (maybe timeout due to too large range?)"
+                        ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+                            "BigTable query failed (maybe timeout due to too large range?, None::<()>)"
                                 .to_string(),
                         )
                     });
@@ -1471,7 +1471,7 @@ impl JsonRpcRequestProcessor {
         let mut blocks: Vec<_> = self
             .blockstore
             .rooted_slot_iterator(max(start_slot, lowest_blockstore_slot))
-            .map_err(|_| Error::internal_error())?
+            .map_err(|_| ErrorObject::owned(ErrorCode::InternalError.code(), "Internal error".to_string(), None::<()>))?
             .filter(|&slot| slot <= end_slot && slot <= highest_super_majority_root)
             .collect();
         let last_element = blocks
@@ -1500,15 +1500,15 @@ impl JsonRpcRequestProcessor {
         start_slot: Slot,
         limit: usize,
         config: Option<RpcContextConfig>,
-    ) -> Result<Vec<Slot>> {
+    ) -> RpcResult<Vec<Slot>> {
         let config = config.unwrap_or_default();
         let commitment = config.commitment.unwrap_or_default();
         check_is_at_least_confirmed(commitment)?;
 
         if limit > MAX_GET_CONFIRMED_BLOCKS_RANGE as usize {
-            return Err(Error::invalid_params(format!(
+            return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                 "Limit too large; max {MAX_GET_CONFIRMED_BLOCKS_RANGE}"
-            )));
+            , None::<()>)));
         }
 
         let lowest_blockstore_slot = self
@@ -1548,7 +1548,7 @@ impl JsonRpcRequestProcessor {
         let mut blocks: Vec<_> = self
             .blockstore
             .rooted_slot_iterator(max(start_slot, lowest_blockstore_slot))
-            .map_err(|_| Error::internal_error())?
+            .map_err(|_| ErrorObject::owned(ErrorCode::InternalError.code(), "Internal error".to_string(), None::<()>))?
             .take(limit)
             .filter(|&slot| slot <= highest_super_majority_root)
             .collect();
@@ -1574,7 +1574,7 @@ impl JsonRpcRequestProcessor {
         Ok(blocks)
     }
 
-    pub async fn get_block_time(&self, slot: Slot) -> Result<Option<UnixTimestamp>> {
+    pub async fn get_block_time(&self, slot: Slot) -> RpcResult<Option<UnixTimestamp>> {
         if slot == 0 {
             return Ok(Some(self.genesis_creation_time()));
         }
@@ -1612,7 +1612,7 @@ impl JsonRpcRequestProcessor {
         &self,
         signature: Signature,
         commitment: Option<CommitmentConfig>,
-    ) -> Result<Option<RpcSignatureConfirmation>> {
+    ) -> RpcResult<Option<RpcSignatureConfirmation>> {
         let bank = self.bank(commitment);
         Ok(self
             .get_transaction_status(signature, &bank)
@@ -1631,7 +1631,7 @@ impl JsonRpcRequestProcessor {
         &self,
         signature: Signature,
         commitment: Option<CommitmentConfig>,
-    ) -> Result<Option<transaction::Result<()>>> {
+    ) -> RpcResult<Option<transaction::Result<()>>> {
         let bank = self.bank(commitment);
         Ok(bank
             .get_signature_status_slot(&signature)
@@ -1642,7 +1642,7 @@ impl JsonRpcRequestProcessor {
         &self,
         signatures: Vec<Signature>,
         config: Option<RpcSignatureStatusConfig>,
-    ) -> Result<RpcResponse<Vec<Option<TransactionStatus>>>> {
+    ) -> RpcResult<RpcResponse<Vec<Option<TransactionStatus>>>> {
         let search_transaction_history = config
             .map(|x| x.search_transaction_history)
             .unwrap_or(false);
@@ -1660,7 +1660,7 @@ impl JsonRpcRequestProcessor {
                 if let Some(status) = self
                     .blockstore
                     .get_rooted_transaction_status(signature)
-                    .map_err(|_| Error::internal_error())?
+                    .map_err(|_| ErrorObject::owned(ErrorCode::InternalError.code(), "Internal error".to_string(), None::<()>))?
                     .filter(|(slot, _status_meta)| {
                         slot <= &self
                             .block_commitment_cache
@@ -1738,7 +1738,7 @@ impl JsonRpcRequestProcessor {
         &self,
         signature: Signature,
         config: Option<RpcEncodingConfigWrapper<RpcTransactionConfig>>,
-    ) -> Result<Option<EncodedConfirmedTransactionWithStatusMeta>> {
+    ) -> RpcResult<Option<EncodedConfirmedTransactionWithStatusMeta>> {
         self.check_if_transaction_history_enabled()?;
 
         let config = config
@@ -1768,7 +1768,7 @@ impl JsonRpcRequestProcessor {
             .expect("Failed to spawn blocking task");
 
         let encode_transaction =
-                |confirmed_tx_with_meta: ConfirmedTransactionWithStatusMeta| -> Result<EncodedConfirmedTransactionWithStatusMeta> {
+                |confirmed_tx_with_meta: ConfirmedTransactionWithStatusMeta| -> RpcResult<EncodedConfirmedTransactionWithStatusMeta> {
                     Ok(confirmed_tx_with_meta.encode(encoding, max_supported_transaction_version).map_err(RpcCustomError::from)?)
                 };
 
@@ -1820,7 +1820,7 @@ impl JsonRpcRequestProcessor {
         until: Option<Signature>,
         mut limit: usize,
         config: RpcContextConfig,
-    ) -> Result<Vec<RpcConfirmedTransactionStatusWithSignature>> {
+    ) -> RpcResult<Vec<RpcConfirmedTransactionStatusWithSignature>> {
         self.check_if_transaction_history_enabled()?;
 
         let commitment = config.commitment.unwrap_or_default();
@@ -1851,7 +1851,7 @@ impl JsonRpcRequestProcessor {
         } = self
             .blockstore
             .get_confirmed_signatures_for_address2(address, highest_slot, before, until, limit)
-            .map_err(|err| Error::invalid_params(format!("{err}")))?;
+            .map_err(|err| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("{err}", None::<()>)))?;
 
         let map_results = |results: Vec<ConfirmedTransactionStatusWithSignature>| {
             results
@@ -1960,19 +1960,19 @@ impl JsonRpcRequestProcessor {
         &self,
         pubkey: &Pubkey,
         commitment: Option<CommitmentConfig>,
-    ) -> Result<RpcResponse<UiTokenAmount>> {
+    ) -> RpcResult<RpcResponse<UiTokenAmount>> {
         let bank = self.bank(commitment);
         let account = bank.get_account(pubkey).ok_or_else(|| {
-            Error::invalid_params("Invalid param: could not find account".to_string())
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), "Invalid param: could not find account".to_string(, None::<()>))
         })?;
 
         if !is_known_spl_token_id(account.owner()) {
-            return Err(Error::invalid_params(
-                "Invalid param: not a Token account".to_string(),
+            return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+                "Invalid param: not a Token account".to_string(, None::<()>),
             ));
         }
         let token_account = StateWithExtensions::<TokenAccount>::unpack(account.data())
-            .map_err(|_| Error::invalid_params("Invalid param: not a Token account".to_string()))?;
+            .map_err(|_| ErrorObject::owned(ErrorCode::InvalidParams.code(), "Invalid param: not a Token account".to_string(, None::<()>)))?;
         let mint = &Pubkey::from_str(&token_account.base.mint.to_string())
             .expect("Token account mint should be convertible to Pubkey");
         let (_, data) = get_mint_owner_and_additional_data(&bank, mint)?;
@@ -1984,18 +1984,18 @@ impl JsonRpcRequestProcessor {
         &self,
         mint: &Pubkey,
         commitment: Option<CommitmentConfig>,
-    ) -> Result<RpcResponse<UiTokenAmount>> {
+    ) -> RpcResult<RpcResponse<UiTokenAmount>> {
         let bank = self.bank(commitment);
         let mint_account = bank.get_account(mint).ok_or_else(|| {
-            Error::invalid_params("Invalid param: could not find account".to_string())
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), "Invalid param: could not find account".to_string(, None::<()>))
         })?;
         if !is_known_spl_token_id(mint_account.owner()) {
-            return Err(Error::invalid_params(
-                "Invalid param: not a Token mint".to_string(),
+            return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+                "Invalid param: not a Token mint".to_string(, None::<()>),
             ));
         }
         let mint = StateWithExtensions::<Mint>::unpack(mint_account.data()).map_err(|_| {
-            Error::invalid_params("Invalid param: mint could not be unpacked".to_string())
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), "Invalid param: mint could not be unpacked".to_string(, None::<()>))
         })?;
 
         let interest_bearing_config = mint
@@ -2023,12 +2023,12 @@ impl JsonRpcRequestProcessor {
         &self,
         mint: Pubkey,
         commitment: Option<CommitmentConfig>,
-    ) -> Result<RpcResponse<Vec<RpcTokenAccountBalance>>> {
+    ) -> RpcResult<RpcResponse<Vec<RpcTokenAccountBalance>>> {
         let bank = self.bank(commitment);
         let (mint_owner, data) = get_mint_owner_and_additional_data(&bank, &mint)?;
         if !is_known_spl_token_id(&mint_owner) {
-            return Err(Error::invalid_params(
-                "Invalid param: not a Token mint".to_string(),
+            return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+                "Invalid param: not a Token mint".to_string(, None::<()>),
             ));
         }
 
@@ -2081,7 +2081,7 @@ impl JsonRpcRequestProcessor {
         token_account_filter: TokenAccountsFilter,
         config: Option<RpcAccountInfoConfig>,
         sort_results: bool,
-    ) -> Result<RpcResponse<Vec<RpcKeyedAccount>>> {
+    ) -> RpcResult<RpcResponse<Vec<RpcKeyedAccount>>> {
         let RpcAccountInfoConfig {
             encoding,
             data_slice: data_slice_config,
@@ -2135,7 +2135,7 @@ impl JsonRpcRequestProcessor {
         token_account_filter: TokenAccountsFilter,
         config: Option<RpcAccountInfoConfig>,
         sort_results: bool,
-    ) -> Result<RpcResponse<Vec<RpcKeyedAccount>>> {
+    ) -> RpcResult<RpcResponse<Vec<RpcKeyedAccount>>> {
         let RpcAccountInfoConfig {
             encoding,
             data_slice: data_slice_config,
@@ -2349,7 +2349,7 @@ impl JsonRpcRequestProcessor {
         }
     }
 
-    fn get_latest_blockhash(&self, config: RpcContextConfig) -> Result<RpcResponse<RpcBlockhash>> {
+    fn get_latest_blockhash(&self, config: RpcContextConfig) -> RpcResult<RpcResponse<RpcBlockhash>> {
         let bank = self.get_bank_with_config(config)?;
         let blockhash = bank.last_blockhash();
         let last_valid_block_height = bank
@@ -2368,13 +2368,13 @@ impl JsonRpcRequestProcessor {
         &self,
         blockhash: &Hash,
         config: RpcContextConfig,
-    ) -> Result<RpcResponse<bool>> {
+    ) -> RpcResult<RpcResponse<bool>> {
         let bank = self.get_bank_with_config(config)?;
         let is_valid = bank.is_blockhash_valid(blockhash);
         Ok(new_response(&bank, is_valid))
     }
 
-    fn get_stake_minimum_delegation(&self, config: RpcContextConfig) -> Result<RpcResponse<u64>> {
+    fn get_stake_minimum_delegation(&self, config: RpcContextConfig) -> RpcResult<RpcResponse<u64>> {
         let bank = self.get_bank_with_config(config)?;
         let stake_minimum_delegation = stake_utils::get_minimum_delegation(
             bank.feature_set
@@ -2386,10 +2386,10 @@ impl JsonRpcRequestProcessor {
     fn get_recent_prioritization_fees(
         &self,
         pubkeys: Vec<Pubkey>,
-    ) -> Result<Vec<RpcPrioritizationFee>> {
+    ) -> RpcResult<Vec<RpcPrioritizationFee>> {
         let Some(prioritization_fee_cache) = self.prioritization_fee_cache.as_deref() else {
             error!("The PrioritizationFeeCache should always be available for the full RPC API");
-            return Err(Error::internal_error());
+            return Err(ErrorObject::owned(ErrorCode::InternalError.code(), "Internal error".to_string(), None::<()>));
         };
 
         Ok(prioritization_fee_cache
@@ -2414,11 +2414,11 @@ pub(crate) fn optimize_filters(filters: &mut [RpcFilterType]) {
     })
 }
 
-pub(crate) fn verify_filters(filters: &[RpcFilterType]) -> Result<()> {
+pub(crate) fn verify_filters(filters: &[RpcFilterType]) -> RpcResult<()> {
     if filters.len() > MAX_GET_PROGRAM_ACCOUNT_FILTERS {
-        return Err(Error::invalid_params(format!(
+        return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
             "Too many filters provided; max {MAX_GET_PROGRAM_ACCOUNT_FILTERS}"
-        )));
+        , None::<()>)));
     }
     for filter in filters {
         verify_filter(filter)?;
@@ -2426,33 +2426,33 @@ pub(crate) fn verify_filters(filters: &[RpcFilterType]) -> Result<()> {
     Ok(())
 }
 
-fn verify_filter(input: &RpcFilterType) -> Result<()> {
+fn verify_filter(input: &RpcFilterType) -> RpcResult<()> {
     input
         .verify()
-        .map_err(|e| Error::invalid_params(format!("Invalid param: {e:?}")))
+        .map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Invalid param: {e:?}", None::<()>)))
 }
 
-pub fn verify_pubkey(input: &str) -> Result<Pubkey> {
+pub fn verify_pubkey(input: &str) -> RpcResult<Pubkey> {
     input
         .parse()
-        .map_err(|e| Error::invalid_params(format!("Invalid param: {e:?}")))
+        .map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Invalid param: {e:?}", None::<()>)))
 }
 
-fn verify_hash(input: &str) -> Result<Hash> {
+fn verify_hash(input: &str) -> RpcResult<Hash> {
     input
         .parse()
-        .map_err(|e| Error::invalid_params(format!("Invalid param: {e:?}")))
+        .map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Invalid param: {e:?}", None::<()>)))
 }
 
-fn verify_signature(input: &str) -> Result<Signature> {
+fn verify_signature(input: &str) -> RpcResult<Signature> {
     input
         .parse()
-        .map_err(|e| Error::invalid_params(format!("Invalid param: {e:?}")))
+        .map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Invalid param: {e:?}", None::<()>)))
 }
 
 fn verify_token_account_filter(
     token_account_filter: RpcTokenAccountsFilter,
-) -> Result<TokenAccountsFilter> {
+) -> RpcResult<TokenAccountsFilter> {
     match token_account_filter {
         RpcTokenAccountsFilter::Mint(mint_str) => {
             let mint = verify_pubkey(&mint_str)?;
@@ -2470,7 +2470,7 @@ fn verify_and_parse_signatures_for_address_params(
     before: Option<String>,
     until: Option<String>,
     limit: Option<usize>,
-) -> Result<(Pubkey, Option<Signature>, Option<Signature>, usize)> {
+) -> RpcResult<(Pubkey, Option<Signature>, Option<Signature>, usize)> {
     let address = verify_pubkey(&address)?;
     let before = before
         .map(|ref before| verify_signature(before))
@@ -2479,18 +2479,18 @@ fn verify_and_parse_signatures_for_address_params(
     let limit = limit.unwrap_or(MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT);
 
     if limit == 0 || limit > MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT {
-        return Err(Error::invalid_params(format!(
+        return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
             "Invalid limit; max {MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT}"
-        )));
+        , None::<()>)));
     }
     Ok((address, before, until, limit))
 }
 
-pub(crate) fn check_is_at_least_confirmed(commitment: CommitmentConfig) -> Result<()> {
+pub(crate) fn check_is_at_least_confirmed(commitment: CommitmentConfig) -> RpcResult<()> {
     if !commitment.is_at_least_confirmed() {
-        return Err(Error::invalid_params(
+        return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
             "Method does not support commitment below `confirmed`",
-        ));
+        , None::<()>));
     }
     Ok(())
 }
@@ -2502,7 +2502,7 @@ fn get_encoded_account(
     data_slice: Option<UiDataSliceConfig>,
     // only used for simulation results
     overwrite_accounts: Option<&HashMap<Pubkey, AccountSharedData>>,
-) -> Result<Option<UiAccount>> {
+) -> RpcResult<Option<UiAccount>> {
     match account_resolver::get_account_from_overwrites_or_bank(pubkey, bank, overwrite_accounts) {
         Some(account) => {
             let response = if is_known_spl_token_id(account.owner())
@@ -2523,7 +2523,7 @@ fn encode_account<T: ReadableAccount>(
     pubkey: &Pubkey,
     encoding: UiAccountEncoding,
     data_slice: Option<UiDataSliceConfig>,
-) -> Result<UiAccount> {
+) -> RpcResult<UiAccount> {
     if (encoding == UiAccountEncoding::Binary || encoding == UiAccountEncoding::Base58)
         && data_slice
             .map(|s| min(s.length, account.data().len().saturating_sub(s.offset)))
@@ -2553,7 +2553,7 @@ fn encode_account<T: ReadableAccount>(
 fn get_spl_token_owner_filter(
     program_id: &Pubkey,
     filters: &[RpcFilterType],
-) -> Result<Option<Pubkey>> {
+) -> RpcResult<Option<Pubkey>> {
     if !is_known_spl_token_id(program_id) {
         return Ok(None);
     }
@@ -2574,9 +2574,9 @@ fn get_spl_token_owner_filter(
                         if bytes.len() == PUBKEY_BYTES {
                             owner_key = Pubkey::try_from(bytes).ok();
                         } else {
-                            return Err(Error::invalid_params(format!(
+                            return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                                 "Incorrect byte length {} for SPL token owner filter, expected {}",
-                                bytes.len(),
+                                bytes.len(, None::<()>),
                                 PUBKEY_BYTES
                             )));
                         }
@@ -2604,7 +2604,7 @@ fn get_spl_token_owner_filter(
 fn get_spl_token_mint_filter(
     program_id: &Pubkey,
     filters: &[RpcFilterType],
-) -> Result<Option<Pubkey>> {
+) -> RpcResult<Option<Pubkey>> {
     if !is_known_spl_token_id(program_id) {
         return Ok(None);
     }
@@ -2625,9 +2625,9 @@ fn get_spl_token_mint_filter(
                         if bytes.len() == PUBKEY_BYTES {
                             mint = Pubkey::try_from(bytes).ok();
                         } else {
-                            return Err(Error::invalid_params(format!(
+                            return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                                 "Incorrect byte length {} for SPL token mint filter, expected {}",
-                                bytes.len(),
+                                bytes.len(, None::<()>),
                                 PUBKEY_BYTES
                             )));
                         }
@@ -2653,13 +2653,13 @@ fn get_spl_token_mint_filter(
 fn get_token_program_id_and_mint(
     bank: &Bank,
     token_account_filter: TokenAccountsFilter,
-) -> Result<(Pubkey, Option<Pubkey>)> {
+) -> RpcResult<(Pubkey, Option<Pubkey>)> {
     match token_account_filter {
         TokenAccountsFilter::Mint(mint) => {
             let (mint_owner, _) = get_mint_owner_and_additional_data(bank, &mint)?;
             if !is_known_spl_token_id(&mint_owner) {
-                return Err(Error::invalid_params(
-                    "Invalid param: not a Token mint".to_string(),
+                return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+                    "Invalid param: not a Token mint".to_string(, None::<()>),
                 ));
             }
             Ok((mint_owner, Some(mint)))
@@ -2668,8 +2668,8 @@ fn get_token_program_id_and_mint(
             if is_known_spl_token_id(&program_id) {
                 Ok((program_id, None))
             } else {
-                Err(Error::invalid_params(
-                    "Invalid param: unrecognized Token program id".to_string(),
+                Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+                    "Invalid param: unrecognized Token program id".to_string(, None::<()>),
                 ))
             }
         }
@@ -2685,7 +2685,7 @@ fn _send_transaction(
     last_valid_block_height: u64,
     durable_nonce_info: Option<(Pubkey, Hash)>,
     max_retries: Option<usize>,
-) -> Result<String> {
+) -> RpcResult<String> {
     let transaction_info = TransactionInfo::new(
         message_hash,
         signature,
@@ -3791,12 +3791,11 @@ pub mod rpc_full {
             )
         }
 
-        fn send_transaction(
+        async fn send_transaction(
             &self,
-            meta: Self::Metadata,
             data: String,
             config: Option<RpcSendTransactionConfig>,
-        ) -> Result<String> {
+        ) -> RpcResult<String> {
             debug!("send_transaction rpc request received");
             let RpcSendTransactionConfig {
                 skip_preflight,
@@ -3807,9 +3806,9 @@ pub mod rpc_full {
             } = config.unwrap_or_default();
             let tx_encoding = encoding.unwrap_or(UiTransactionEncoding::Base58);
             let binary_encoding = tx_encoding.into_binary_encoding().ok_or_else(|| {
-                Error::invalid_params(format!(
+                ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                     "unsupported encoding: {tx_encoding}. Supported encodings: base58, base64"
-                ))
+                , None::<()>))
             })?;
             let (wire_transaction, unsanitized_tx) =
                 decode_and_deserialize::<VersionedTransaction>(data, binary_encoding)?;
@@ -3819,7 +3818,7 @@ pub mod rpc_full {
             } else {
                 preflight_commitment.map(|commitment| CommitmentConfig { commitment })
             };
-            let preflight_bank = &*meta.get_bank_with_config(RpcContextConfig {
+            let preflight_bank = &*self.request_processor.get_bank_with_config(RpcContextConfig {
                 commitment: preflight_commitment,
                 min_context_slot,
             })?;
@@ -3854,8 +3853,8 @@ pub mod rpc_full {
             if !skip_preflight {
                 let verification_error = transaction.verify().err();
 
-                if verification_error.is_none() && !meta.config.skip_preflight_health_check {
-                    match meta.health.check() {
+                if verification_error.is_none() && !self.request_processor.config.skip_preflight_health_check {
+                    match self.request_processor.health.check() {
                         RpcHealthStatus::Ok => (),
                         RpcHealthStatus::Unknown => {
                             inc_new_counter_info!("rpc-send-tx_health-unknown", 1);
@@ -3927,7 +3926,7 @@ pub mod rpc_full {
             }
 
             _send_transaction(
-                meta,
+                self.request_processor.clone(),
                 message_hash,
                 signature,
                 blockhash,
@@ -3938,12 +3937,11 @@ pub mod rpc_full {
             )
         }
 
-        fn simulate_transaction(
+        async fn simulate_transaction(
             &self,
-            meta: Self::Metadata,
             data: String,
             config: Option<RpcSimulateTransactionConfig>,
-        ) -> Result<RpcResponse<RpcSimulateTransactionResult>> {
+        ) -> RpcResult<RpcResponse<RpcSimulateTransactionResult>> {
             debug!("simulate_transaction rpc request received");
             let RpcSimulateTransactionConfig {
                 sig_verify,
@@ -3956,23 +3954,23 @@ pub mod rpc_full {
             } = config.unwrap_or_default();
             let tx_encoding = encoding.unwrap_or(UiTransactionEncoding::Base58);
             let binary_encoding = tx_encoding.into_binary_encoding().ok_or_else(|| {
-                Error::invalid_params(format!(
+                ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                     "unsupported encoding: {tx_encoding}. Supported encodings: base58, base64"
-                ))
+                , None::<()>))
             })?;
             let (_, mut unsanitized_tx) =
                 decode_and_deserialize::<VersionedTransaction>(data, binary_encoding)?;
 
-            let bank = &*meta.get_bank_with_config(RpcContextConfig {
+            let bank = &*self.request_processor.get_bank_with_config(RpcContextConfig {
                 commitment,
                 min_context_slot,
             })?;
             let mut blockhash: Option<RpcBlockhash> = None;
             if replace_recent_blockhash {
                 if sig_verify {
-                    return Err(Error::invalid_params(
+                    return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
                         "sigVerify may not be used with replaceRecentBlockhash",
-                    ));
+                    , None::<()>));
                 }
                 let recent_blockhash = bank.last_blockhash();
                 unsanitized_tx
@@ -4033,13 +4031,13 @@ pub mod rpc_full {
                 if accounts_encoding == UiAccountEncoding::Binary
                     || accounts_encoding == UiAccountEncoding::Base58
                 {
-                    return Err(Error::invalid_params("base58 encoding not supported"));
+                    return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), "base58 encoding not supported", None::<()>));
                 }
 
                 if config_accounts.addresses.len() > number_of_accounts {
-                    return Err(Error::invalid_params(format!(
+                    return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                         "Too many accounts provided; max {number_of_accounts}"
-                    )));
+                    , None::<()>)));
                 }
 
                 if result.is_err() {
@@ -4102,76 +4100,69 @@ pub mod rpc_full {
             ))
         }
 
-        fn minimum_ledger_slot(&self, meta: Self::Metadata) -> Result<Slot> {
+        async fn minimum_ledger_slot(&self) -> RpcResult<Slot> {
             debug!("minimum_ledger_slot rpc request received");
-            meta.minimum_ledger_slot()
+            self.request_processor.minimum_ledger_slot()
         }
 
-        fn get_block(
+        async fn get_block(
             &self,
-            meta: Self::Metadata,
             slot: Slot,
             config: Option<RpcEncodingConfigWrapper<RpcBlockConfig>>,
-        ) -> BoxFuture<Result<Option<UiConfirmedBlock>>> {
+        ) -> RpcResult<Option<UiConfirmedBlock>> {
             debug!("get_block rpc request received: {slot:?}");
-            Box::pin(async move { meta.get_block(slot, config).await })
+            self.request_processor.get_block(slot, config).await
         }
 
-        fn get_blocks(
+        async fn get_blocks(
             &self,
-            meta: Self::Metadata,
             start_slot: Slot,
             wrapper: Option<RpcBlocksConfigWrapper>,
             config: Option<RpcContextConfig>,
-        ) -> BoxFuture<Result<Vec<Slot>>> {
+        ) -> RpcResult<Vec<Slot>> {
             let (end_slot, maybe_config) =
                 wrapper.map(|wrapper| wrapper.unzip()).unwrap_or_default();
             debug!("get_blocks rpc request received: {start_slot}-{end_slot:?}");
-            Box::pin(async move {
-                meta.get_blocks(start_slot, end_slot, config.or(maybe_config))
-                    .await
-            })
+            
+            self.request_processor.get_blocks(start_slot, end_slot, config.or(maybe_config))
+                .await
         }
 
-        fn get_blocks_with_limit(
+        async fn get_blocks_with_limit(
             &self,
-            meta: Self::Metadata,
             start_slot: Slot,
             limit: usize,
             config: Option<RpcContextConfig>,
-        ) -> BoxFuture<Result<Vec<Slot>>> {
+        ) -> RpcResult<Vec<Slot>> {
             debug!("get_blocks_with_limit rpc request received: {start_slot}-{limit}",);
-            Box::pin(async move { meta.get_blocks_with_limit(start_slot, limit, config).await })
+            self.request_processor.get_blocks_with_limit(start_slot, limit, config).await
         }
 
-        fn get_block_time(
+        async fn get_block_time(
             &self,
-            meta: Self::Metadata,
             slot: Slot,
-        ) -> BoxFuture<Result<Option<UnixTimestamp>>> {
-            Box::pin(async move { meta.get_block_time(slot).await })
+        ) -> RpcResult<Option<UnixTimestamp>> {
+            self.request_processor.get_block_time(slot).await
         }
 
-        fn get_transaction(
+        async fn get_transaction(
             &self,
-            meta: Self::Metadata,
             signature_str: String,
             config: Option<RpcEncodingConfigWrapper<RpcTransactionConfig>>,
-        ) -> BoxFuture<Result<Option<EncodedConfirmedTransactionWithStatusMeta>>> {
+        ) -> RpcResult<Option<EncodedConfirmedTransactionWithStatusMeta>> {
             debug!("get_transaction rpc request received: {signature_str:?}");
             let signature = verify_signature(&signature_str);
             if let Err(err) = signature {
-                return Box::pin(future::err(err));
+                return Err(err);
             }
-            Box::pin(async move { meta.get_transaction(signature.unwrap(), config).await })
+            self.request_processor.get_transaction(signature.unwrap(), config).await
         }
 
-        fn get_signatures_for_address(
+        async fn get_signatures_for_address(
             &self,
-            meta: Self::Metadata,
             address: String,
             config: Option<RpcSignaturesForAddressConfig>,
-        ) -> BoxFuture<Result<Vec<RpcConfirmedTransactionStatusWithSignature>>> {
+        ) -> RpcResult<Vec<RpcConfirmedTransactionStatusWithSignature>> {
             let RpcSignaturesForAddressConfig {
                 before,
                 until,
@@ -4183,9 +4174,9 @@ pub mod rpc_full {
                 verify_and_parse_signatures_for_address_params(address, before, until, limit);
 
             match verification {
-                Err(err) => Box::pin(future::err(err)),
-                Ok((address, before, until, limit)) => Box::pin(async move {
-                    meta.get_signatures_for_address(
+                Err(err) => Err(err),
+                Ok((address, before, until, limit)) => 
+                    self.request_processor.get_signatures_for_address(
                         address,
                         before,
                         until,
@@ -4196,21 +4187,19 @@ pub mod rpc_full {
                         },
                     )
                     .await
-                }),
             }
         }
 
-        fn get_first_available_block(&self, meta: Self::Metadata) -> BoxFuture<Result<Slot>> {
+        async fn get_first_available_block(&self) -> RpcResult<Slot> {
             debug!("get_first_available_block rpc request received");
-            Box::pin(async move { Ok(meta.get_first_available_block().await) })
+            Ok(self.request_processor.get_first_available_block().await)
         }
 
-        fn get_inflation_reward(
+        async fn get_inflation_reward(
             &self,
-            meta: Self::Metadata,
             address_strs: Vec<String>,
             config: Option<RpcEpochConfig>,
-        ) -> BoxFuture<Result<Vec<Option<RpcInflationReward>>>> {
+        ) -> RpcResult<Vec<Option<RpcInflationReward>>> {
             debug!(
                 "get_inflation_reward rpc request received: {:?}",
                 address_strs.len()
@@ -4222,88 +4211,83 @@ pub mod rpc_full {
                     Ok(pubkey) => {
                         addresses.push(pubkey);
                     }
-                    Err(err) => return Box::pin(future::err(err)),
+                    Err(err) => return Err(err),
                 }
             }
 
-            Box::pin(async move { meta.get_inflation_reward(addresses, config).await })
+            self.request_processor.get_inflation_reward(addresses, config).await
         }
 
-        fn get_latest_blockhash(
+        async fn get_latest_blockhash(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<RpcBlockhash>> {
+        ) -> RpcResult<RpcResponse<RpcBlockhash>> {
             debug!("get_latest_blockhash rpc request received");
-            meta.get_latest_blockhash(config.unwrap_or_default())
+            self.request_processor.get_latest_blockhash(config.unwrap_or_default())
         }
 
-        fn is_blockhash_valid(
+        async fn is_blockhash_valid(
             &self,
-            meta: Self::Metadata,
             blockhash: String,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<bool>> {
+        ) -> RpcResult<RpcResponse<bool>> {
             let blockhash =
-                Hash::from_str(&blockhash).map_err(|e| Error::invalid_params(format!("{e:?}")))?;
-            meta.is_blockhash_valid(&blockhash, config.unwrap_or_default())
+                Hash::from_str(&blockhash).map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("{e:?}", None::<()>)))?;
+            self.request_processor.is_blockhash_valid(&blockhash, config.unwrap_or_default())
         }
 
-        fn get_fee_for_message(
+        async fn get_fee_for_message(
             &self,
-            meta: Self::Metadata,
             data: String,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<Option<u64>>> {
+        ) -> RpcResult<RpcResponse<Option<u64>>> {
             debug!("get_fee_for_message rpc request received");
             let (_, message) = decode_and_deserialize::<VersionedMessage>(
                 data,
                 TransactionBinaryEncoding::Base64,
             )?;
-            let bank = &*meta.get_bank_with_config(config.unwrap_or_default())?;
+            let bank = &*self.request_processor.get_bank_with_config(config.unwrap_or_default())?;
             let sanitized_versioned_message = SanitizedVersionedMessage::try_from(message)
                 .map_err(|err| {
-                    Error::invalid_params(format!("invalid transaction message: {err}"))
+                    ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("invalid transaction message: {err}", None::<()>))
                 })?;
             let sanitized_message = SanitizedMessage::try_new(
                 sanitized_versioned_message,
                 bank,
                 bank.get_reserved_account_keys(),
             )
-            .map_err(|err| Error::invalid_params(format!("invalid transaction message: {err}")))?;
+            .map_err(|err| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("invalid transaction message: {err}", None::<()>)))?;
             let fee = bank.get_fee_for_message(&sanitized_message);
             Ok(new_response(bank, fee))
         }
 
-        fn get_stake_minimum_delegation(
+        async fn get_stake_minimum_delegation(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<u64>> {
+        ) -> RpcResult<RpcResponse<u64>> {
             debug!("get_stake_minimum_delegation rpc request received");
-            meta.get_stake_minimum_delegation(config.unwrap_or_default())
+            self.request_processor.get_stake_minimum_delegation(config.unwrap_or_default())
         }
 
-        fn get_recent_prioritization_fees(
+        async fn get_recent_prioritization_fees(
             &self,
-            meta: Self::Metadata,
             pubkey_strs: Option<Vec<String>>,
-        ) -> Result<Vec<RpcPrioritizationFee>> {
+        ) -> RpcResult<Vec<RpcPrioritizationFee>> {
             let pubkey_strs = pubkey_strs.unwrap_or_default();
             debug!(
                 "get_recent_prioritization_fees rpc request received: {:?} pubkeys",
                 pubkey_strs.len()
             );
             if pubkey_strs.len() > MAX_TX_ACCOUNT_LOCKS {
-                return Err(Error::invalid_params(format!(
+                return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                     "Too many inputs provided; max {MAX_TX_ACCOUNT_LOCKS}"
-                )));
+                , None::<()>)));
             }
             let pubkeys = pubkey_strs
                 .into_iter()
                 .map(|pubkey_str| verify_pubkey(&pubkey_str))
                 .collect::<Result<Vec<_>>>()?;
-            meta.get_recent_prioritization_fees(pubkeys)
+            self.request_processor.get_recent_prioritization_fees(pubkeys)
         }
     }
 }
@@ -4341,7 +4325,7 @@ const MAX_BASE64_SIZE: usize = 1644; // Golden, bump if PACKET_DATA_SIZE changes
 fn decode_and_deserialize<T>(
     encoded: String,
     encoding: TransactionBinaryEncoding,
-) -> Result<(Vec<u8>, T)>
+) -> RpcResult<(Vec<u8>, T)>
 where
     T: serde::de::DeserializeOwned,
 {
@@ -4349,8 +4333,8 @@ where
         TransactionBinaryEncoding::Base58 => {
             inc_new_counter_info!("rpc-base58_encoded_tx", 1);
             if encoded.len() > MAX_BASE58_SIZE {
-                return Err(Error::invalid_params(format!(
-                    "base58 encoded {} too large: {} bytes (max: encoded/raw {}/{})",
+                return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
+                    "base58 encoded {} too large: {} bytes (max: encoded/raw {}/{}, None::<()>)",
                     type_name::<T>(),
                     encoded.len(),
                     MAX_BASE58_SIZE,
@@ -4359,13 +4343,13 @@ where
             }
             bs58::decode(encoded)
                 .into_vec()
-                .map_err(|e| Error::invalid_params(format!("invalid base58 encoding: {e:?}")))?
+                .map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("invalid base58 encoding: {e:?}", None::<()>)))?
         }
         TransactionBinaryEncoding::Base64 => {
             inc_new_counter_info!("rpc-base64_encoded_tx", 1);
             if encoded.len() > MAX_BASE64_SIZE {
-                return Err(Error::invalid_params(format!(
-                    "base64 encoded {} too large: {} bytes (max: encoded/raw {}/{})",
+                return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
+                    "base64 encoded {} too large: {} bytes (max: encoded/raw {}/{}, None::<()>)",
                     type_name::<T>(),
                     encoded.len(),
                     MAX_BASE64_SIZE,
@@ -4374,12 +4358,12 @@ where
             }
             BASE64_STANDARD
                 .decode(encoded)
-                .map_err(|e| Error::invalid_params(format!("invalid base64 encoding: {e:?}")))?
+                .map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("invalid base64 encoding: {e:?}", None::<()>)))?
         }
     };
     if wire_output.len() > PACKET_DATA_SIZE {
-        return Err(Error::invalid_params(format!(
-            "decoded {} too large: {} bytes (max: {} bytes)",
+        return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
+            "decoded {} too large: {} bytes (max: {} bytes, None::<()>)",
             type_name::<T>(),
             wire_output.len(),
             PACKET_DATA_SIZE
@@ -4391,9 +4375,9 @@ where
         .allow_trailing_bytes()
         .deserialize_from(&wire_output[..])
         .map_err(|err| {
-            Error::invalid_params(format!(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                 "failed to deserialize {}: {}",
-                type_name::<T>(),
+                type_name::<T>(, None::<()>),
                 &err.to_string()
             ))
         })
@@ -4405,7 +4389,7 @@ fn sanitize_transaction(
     address_loader: impl AddressLoader,
     reserved_account_keys: &HashSet<Pubkey>,
     enable_static_instruction_limit: bool,
-) -> Result<RuntimeTransaction<SanitizedTransaction>> {
+) -> RpcResult<RuntimeTransaction<SanitizedTransaction>> {
     RuntimeTransaction::try_create(
         transaction,
         MessageHash::Compute,
@@ -4414,7 +4398,7 @@ fn sanitize_transaction(
         reserved_account_keys,
         enable_static_instruction_limit,
     )
-    .map_err(|err| Error::invalid_params(format!("invalid transaction: {err}")))
+    .map_err(|err| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("invalid transaction: {err}", None::<()>)))
 }
 
 pub fn create_validator_exit(exit: Arc<AtomicBool>) -> Arc<RwLock<Exit>> {
@@ -7067,7 +7051,7 @@ pub mod tests {
         let bad_pubkey = "a1b2c3d4";
         assert_eq!(
             verify_pubkey(bad_pubkey),
-            Err(Error::invalid_params("Invalid param: WrongSize"))
+            Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), "Invalid param: WrongSize", None::<()>))
         );
     }
 
@@ -7086,7 +7070,7 @@ pub mod tests {
         let bad_signature = "a1b2c3d4";
         assert_eq!(
             verify_signature(bad_signature),
-            Err(Error::invalid_params("Invalid param: WrongSize"))
+            Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), "Invalid param: WrongSize", None::<()>))
         );
     }
 
@@ -9101,9 +9085,9 @@ pub mod tests {
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx58, TransactionBinaryEncoding::Base58)
                 .unwrap_err(),
-            Error::invalid_params(format!(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                 "base58 encoded solana_transaction::Transaction too large: {tx58_len} bytes (max: \
-                 encoded/raw {MAX_BASE58_SIZE}/{PACKET_DATA_SIZE})",
+                 encoded/raw {MAX_BASE58_SIZE}/{PACKET_DATA_SIZE}, None::<()>)",
             ))
         );
 
@@ -9112,9 +9096,9 @@ pub mod tests {
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx64, TransactionBinaryEncoding::Base64)
                 .unwrap_err(),
-            Error::invalid_params(format!(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                 "base64 encoded solana_transaction::Transaction too large: {tx64_len} bytes (max: \
-                 encoded/raw {MAX_BASE64_SIZE}/{PACKET_DATA_SIZE})",
+                 encoded/raw {MAX_BASE64_SIZE}/{PACKET_DATA_SIZE}, None::<()>)",
             ))
         );
 
@@ -9124,9 +9108,9 @@ pub mod tests {
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx58, TransactionBinaryEncoding::Base58)
                 .unwrap_err(),
-            Error::invalid_params(format!(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                 "decoded solana_transaction::Transaction too large: {too_big} bytes (max: \
-                 {PACKET_DATA_SIZE} bytes)"
+                 {PACKET_DATA_SIZE} bytes, None::<()>)"
             ))
         );
 
@@ -9134,9 +9118,9 @@ pub mod tests {
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx64, TransactionBinaryEncoding::Base64)
                 .unwrap_err(),
-            Error::invalid_params(format!(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                 "decoded solana_transaction::Transaction too large: {too_big} bytes (max: \
-                 {PACKET_DATA_SIZE} bytes)"
+                 {PACKET_DATA_SIZE} bytes, None::<()>)"
             ))
         );
 
@@ -9145,10 +9129,10 @@ pub mod tests {
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx64.clone(), TransactionBinaryEncoding::Base64)
                 .unwrap_err(),
-            Error::invalid_params(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), 
                 "failed to deserialize solana_transaction::Transaction: invalid value: continue \
                  signal on byte-three, expected a terminal signal on or before byte-three"
-                    .to_string()
+                    .to_string(, None::<()>)
             )
         );
 
@@ -9156,17 +9140,17 @@ pub mod tests {
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx64, TransactionBinaryEncoding::Base64)
                 .unwrap_err(),
-            Error::invalid_params("invalid base64 encoding: InvalidByte(1640, 33)".to_string())
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), "invalid base64 encoding: InvalidByte(1640, 33, None::<()>)".to_string())
         );
 
         let mut tx58 = bs58::encode(&tx_ser).into_string();
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx58.clone(), TransactionBinaryEncoding::Base58)
                 .unwrap_err(),
-            Error::invalid_params(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), 
                 "failed to deserialize solana_transaction::Transaction: invalid value: continue \
                  signal on byte-three, expected a terminal signal on or before byte-three"
-                    .to_string()
+                    .to_string(, None::<()>)
             )
         );
 
@@ -9174,9 +9158,9 @@ pub mod tests {
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx58, TransactionBinaryEncoding::Base58)
                 .unwrap_err(),
-            Error::invalid_params(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), 
                 "invalid base58 encoding: InvalidCharacter { character: '!', index: 1680 }"
-                    .to_string(),
+                    .to_string(, None::<()>),
             )
         );
     }
@@ -9195,9 +9179,9 @@ pub mod tests {
         )
         .unwrap()
         .1;
-        let expect58 = Error::invalid_params(
+        let expect58 = ErrorObject::owned(ErrorCode::InvalidParams.code(), 
             "invalid transaction: Transaction failed to sanitize accounts offsets correctly"
-                .to_string(),
+                .to_string(, None::<()>),
         );
         assert_eq!(
             sanitize_transaction(
@@ -9233,8 +9217,8 @@ pub mod tests {
                 true,
             )
             .unwrap_err(),
-            Error::invalid_params(
-                "invalid transaction: Transaction version is unsupported".to_string(),
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+                "invalid transaction: Transaction version is unsupported".to_string(, None::<()>),
             )
         );
     }

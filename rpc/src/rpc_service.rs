@@ -116,7 +116,7 @@ pub struct JsonRpcService {
     #[cfg(test)]
     pub request_processor: JsonRpcRequestProcessor, // Used only by test_rpc_new()...
 
-    close_handle: Option<CloseHandle>,
+    close_handle: Option<ServerHandle>,
 
     client_updater: Arc<dyn NotifyKeyUpdate + Send + Sync>,
 }
@@ -695,14 +695,25 @@ impl JsonRpcService {
             .spawn(move || {
                 renice_this_thread(rpc_niceness_adj).unwrap();
 
-                let mut io = MetaIoHandler::default();
-
-                io.extend_with(rpc_minimal::MinimalImpl.to_delegate());
+                // Create RPC module with jsonrpsee
+                let mut module = RpcModule::new(());
+                
+                // Add RPC methods
+                let minimal_server = rpc_minimal::MinimalRpcServer::new(request_processor.clone());
+                module.merge(minimal_server.into_rpc()).expect("Failed to merge minimal RPC");
+                
                 if full_api {
-                    io.extend_with(rpc_bank::BankDataImpl.to_delegate());
-                    io.extend_with(rpc_accounts::AccountsDataImpl.to_delegate());
-                    io.extend_with(rpc_accounts_scan::AccountsScanImpl.to_delegate());
-                    io.extend_with(rpc_full::FullImpl.to_delegate());
+                    let bank_server = rpc_bank::BankDataRpcServer::new(request_processor.clone());
+                    module.merge(bank_server.into_rpc()).expect("Failed to merge bank RPC");
+                    
+                    let accounts_server = rpc_accounts::AccountsDataRpcServer::new(request_processor.clone());
+                    module.merge(accounts_server.into_rpc()).expect("Failed to merge accounts RPC");
+                    
+                    let accounts_scan_server = rpc_accounts_scan::AccountsScanRpcServer::new(request_processor.clone());
+                    module.merge(accounts_scan_server.into_rpc()).expect("Failed to merge accounts scan RPC");
+                    
+                    let full_server = rpc_full::FullRpcServer::new(request_processor.clone());
+                    module.merge(full_server.into_rpc()).expect("Failed to merge full RPC");
                 }
 
                 let request_middleware = RpcRequestMiddleware::new(
@@ -711,40 +722,33 @@ impl JsonRpcService {
                     bank_forks.clone(),
                     health.clone(),
                 );
-                let server = ServerBuilder::with_meta_extractor(
-                    io,
-                    move |req: &hyper::Request<hyper::Body>| {
-                        let xbigtable = req.headers().get("x-bigtable");
-                        if xbigtable.is_some_and(|v| v == "disabled") {
-                            request_processor.clone_without_bigtable()
-                        } else {
-                            request_processor.clone()
-                        }
-                    },
-                )
-                .event_loop_executor(runtime.handle().clone())
-                .threads(1)
-                .cors(DomainsValidation::AllowOnly(vec![
-                    AccessControlAllowOrigin::Any,
-                ]))
-                .cors_max_age(86400)
-                .request_middleware(request_middleware)
-                .max_request_body_size(max_request_body_size)
-                .start_http(&rpc_addr);
+                
+                // Build and start jsonrpsee server
+                let server_result = runtime.block_on(async {
+                    ServerBuilder::new()
+                        .max_request_body_size(max_request_body_size as u32)
+                        .build(rpc_addr)
+                        .await
+                });
+                
+                let server = match server_result {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!(
+                            "JSON RPC service unavailable error: {e:?}. Also, check that port {} is \
+                             not already in use by another application",
+                            rpc_addr.port()
+                        );
+                        close_handle_sender.send(Err(e.to_string())).unwrap();
+                        return;
+                    }
+                };
 
-                if let Err(e) = server {
-                    warn!(
-                        "JSON RPC service unavailable error: {e:?}. Also, check that port {} is \
-                         not already in use by another application",
-                        rpc_addr.port()
-                    );
-                    close_handle_sender.send(Err(e.to_string())).unwrap();
-                    return;
-                }
-
-                let server = server.unwrap();
-                close_handle_sender.send(Ok(server.close_handle())).unwrap();
-                server.wait();
+                let handle = server.start(module);
+                close_handle_sender.send(Ok(handle.clone())).unwrap();
+                
+                // Wait for server to stop
+                runtime.block_on(handle.stopped());
                 exit_bigtable_ledger_upload_service.store(true, Ordering::Relaxed);
             })
             .unwrap();
@@ -755,7 +759,7 @@ impl JsonRpcService {
             .write()
             .unwrap()
             .register_exit(Box::new(move || {
-                close_handle_.close();
+                close_handle_.stop().ok();
             }));
         Ok(Self {
             thread_hdl,
@@ -768,7 +772,7 @@ impl JsonRpcService {
 
     pub fn exit(&mut self) {
         if let Some(c) = self.close_handle.take() {
-            c.close()
+            c.stop().ok();
         }
     }
 

@@ -2,14 +2,14 @@
 
 use {
     crate::{
-        rpc_pubsub::{RpcSolPubSubImpl, RpcSolPubSubInternal},
+        rpc_pubsub::{RpcSolPubSubImpl, RpcSolPubSubInternalServer},
         rpc_subscription_tracker::{
             SubscriptionControl, SubscriptionId, SubscriptionParams, SubscriptionToken,
         },
         rpc_subscriptions::{RpcNotification, RpcSubscriptions},
     },
     dashmap::{mapref::entry::Entry, DashMap},
-    jsonrpc_core::IoHandler,
+    jsonrpsee::RpcModule,
     soketto::handshake::{server, Server},
     solana_metrics::TokenCounter,
     solana_rayon_threadlimit::get_thread_count,
@@ -384,13 +384,12 @@ async fn handle_connection(
     let mut data = Vec::new();
     let current_subscriptions = Arc::new(DashMap::new());
 
-    let mut json_rpc_handler = IoHandler::new();
     let rpc_impl = RpcSolPubSubImpl::new(
         config,
         subscription_control,
         Arc::clone(&current_subscriptions),
     );
-    json_rpc_handler.extend_with(rpc_impl.to_delegate());
+    let json_rpc_handler: RpcModule<()> = rpc_impl.into_rpc();
     let broadcast_handler = BroadcastHandler::new(current_subscriptions);
     loop {
         // Extra block for dropping `receive_future`.
@@ -433,8 +432,10 @@ async fn handle_connection(
             break;
         };
 
-        if let Some(response) = json_rpc_handler.handle_request(data_str).await {
-            sender.send_text(&response).await?;
+        // Call the RPC method
+        let response = json_rpc_handler.raw_json_request(data_str, 1).await;
+        if let Ok(resp) = response {
+            sender.send_text(&resp.result).await?;
         }
         data.clear();
     }
