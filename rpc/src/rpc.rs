@@ -3590,34 +3590,39 @@ pub mod rpc_full {
     impl FullApiServer for FullRpcServer {
         async fn get_recent_performance_samples(
             &self,
-            meta: Self::Metadata,
             limit: Option<usize>,
-        ) -> Result<Vec<RpcPerfSample>> {
+        ) -> RpcResult<Vec<RpcPerfSample>> {
             debug!("get_recent_performance_samples request received");
 
             let limit = limit.unwrap_or(PERFORMANCE_SAMPLES_LIMIT);
 
             if limit > PERFORMANCE_SAMPLES_LIMIT {
-                return Err(Error::invalid_params(format!(
-                    "Invalid limit; max {PERFORMANCE_SAMPLES_LIMIT}"
-                )));
+                return Err(ErrorObject::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!("Invalid limit; max {PERFORMANCE_SAMPLES_LIMIT}"),
+                    None::<()>,
+                ));
             }
 
-            Ok(meta
+            Ok(self.request_processor
                 .blockstore
                 .get_recent_perf_samples(limit)
                 .map_err(|err| {
                     warn!("get_recent_performance_samples failed: {err:?}");
-                    Error::invalid_request()
+                    ErrorObject::owned(
+                        ErrorCode::InvalidRequest.code(),
+                        "Invalid request".to_string(),
+                        None::<()>,
+                    )
                 })?
                 .into_iter()
                 .map(|(slot, sample)| rpc_perf_sample_from_perf_sample(slot, sample))
                 .collect())
         }
 
-        fn get_cluster_nodes(&self, meta: Self::Metadata) -> Result<Vec<RpcContactInfo>> {
+        async fn get_cluster_nodes(&self) -> RpcResult<Vec<RpcContactInfo>> {
             debug!("get_cluster_nodes rpc request received");
-            let cluster_info = &meta.cluster_info;
+            let cluster_info = &self.request_processor.cluster_info;
             let socket_addr_space = cluster_info.socket_addr_space();
             let my_shred_version = cluster_info.my_shred_version();
             Ok(cluster_info
@@ -3678,50 +3683,45 @@ pub mod rpc_full {
                 .collect())
         }
 
-        fn get_signature_statuses(
+        async fn get_signature_statuses(
             &self,
-            meta: Self::Metadata,
             signature_strs: Vec<String>,
             config: Option<RpcSignatureStatusConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<Option<TransactionStatus>>>>> {
+        ) -> RpcResult<RpcResponse<Vec<Option<TransactionStatus>>>> {
             debug!(
                 "get_signature_statuses rpc request received: {:?}",
                 signature_strs.len()
             );
             if signature_strs.len() > MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS {
-                return Box::pin(future::err(Error::invalid_params(format!(
-                    "Too many inputs provided; max {MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS}"
-                ))));
+                return Err(ErrorObject::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!("Too many inputs provided; max {MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS}"),
+                    None::<()>,
+                ));
             }
             let mut signatures: Vec<Signature> = vec![];
             for signature_str in signature_strs {
-                match verify_signature(&signature_str) {
-                    Ok(signature) => {
-                        signatures.push(signature);
-                    }
-                    Err(err) => return Box::pin(future::err(err)),
-                }
+                signatures.push(verify_signature(&signature_str)?);
             }
-            Box::pin(async move { meta.get_signature_statuses(signatures, config).await })
+            self.request_processor.get_signature_statuses(signatures, config).await
         }
 
-        fn get_max_retransmit_slot(&self, meta: Self::Metadata) -> Result<Slot> {
+        async fn get_max_retransmit_slot(&self) -> RpcResult<Slot> {
             debug!("get_max_retransmit_slot rpc request received");
-            Ok(meta.get_max_retransmit_slot())
+            Ok(self.request_processor.get_max_retransmit_slot())
         }
 
-        fn get_max_shred_insert_slot(&self, meta: Self::Metadata) -> Result<Slot> {
+        async fn get_max_shred_insert_slot(&self) -> RpcResult<Slot> {
             debug!("get_max_shred_insert_slot rpc request received");
-            Ok(meta.get_max_shred_insert_slot())
+            Ok(self.request_processor.get_max_shred_insert_slot())
         }
 
-        fn request_airdrop(
+        async fn request_airdrop(
             &self,
-            meta: Self::Metadata,
             pubkey_str: String,
             lamports: u64,
             config: Option<RpcRequestAirdropConfig>,
-        ) -> Result<String> {
+        ) -> RpcResult<String> {
             debug!("request_airdrop rpc request received");
             trace!(
                 "request_airdrop id={} lamports={} config: {:?}",
@@ -3730,11 +3730,17 @@ pub mod rpc_full {
                 &config
             );
 
-            let faucet_addr = meta.config.faucet_addr.ok_or_else(Error::invalid_request)?;
+            let faucet_addr = self.request_processor.config.faucet_addr.ok_or_else(|| {
+                ErrorObject::owned(
+                    ErrorCode::InvalidRequest.code(),
+                    "Invalid request".to_string(),
+                    None::<()>,
+                )
+            })?;
             let pubkey = verify_pubkey(&pubkey_str)?;
 
             let config = config.unwrap_or_default();
-            let bank = meta.bank(config.commitment);
+            let bank = self.request_processor.bank(config.commitment);
 
             let blockhash = if let Some(blockhash) = config.recent_blockhash {
                 verify_hash(&blockhash)?
@@ -3749,13 +3755,21 @@ pub mod rpc_full {
                 request_airdrop_transaction(&faucet_addr, &pubkey, lamports, blockhash).map_err(
                     |err| {
                         info!("request_airdrop_transaction failed: {err:?}");
-                        Error::internal_error()
+                        ErrorObject::owned(
+                            ErrorCode::InternalError.code(),
+                            "Internal error".to_string(),
+                            None::<()>,
+                        )
                     },
                 )?;
 
             let wire_transaction = serialize(&transaction).map_err(|err| {
                 info!("request_airdrop: serialize error: {err:?}");
-                Error::internal_error()
+                ErrorObject::owned(
+                    ErrorCode::InternalError.code(),
+                    "Internal error".to_string(),
+                    None::<()>,
+                )
             })?;
 
             let message_hash = transaction.message().hash();
@@ -3766,7 +3780,7 @@ pub mod rpc_full {
             };
 
             _send_transaction(
-                meta,
+                self.request_processor.clone(),
                 message_hash,
                 signature,
                 blockhash,
