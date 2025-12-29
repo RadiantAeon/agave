@@ -6,11 +6,11 @@ use {
         max_slots::MaxSlots,
         optimistically_confirmed_bank_tracker::OptimisticallyConfirmedBank,
         rpc::{
-            rpc_accounts::{AccountsDataApiServer, AccountsDataRpcServer},
-            rpc_accounts_scan::{AccountsScanApiServer, AccountsScanRpcServer},
-            rpc_bank::{BankDataApiServer, BankDataRpcServer},
-            rpc_full::{FullApiServer, FullRpcServer},
-            rpc_minimal::{MinimalApiServer, MinimalRpcServer},
+            rpc_accounts::*,
+            rpc_accounts_scan::*,
+            rpc_bank::*,
+            rpc_full::*,
+            rpc_minimal::*,
             *
         },
         rpc_cache::LargestAccountsCache,
@@ -477,21 +477,44 @@ async fn handle_rest(bank_forks: &Arc<RwLock<BankForks>>, path: &str) -> Option<
 }
 
 fn process_rest(bank_forks: &Arc<RwLock<BankForks>>, path: &str) -> RequestMiddlewareAction {
-    let bank_forks = bank_forks.clone();
-    let path = path.to_string();
-
-    RequestMiddlewareAction::Respond {
-        should_validate_hosts: true,
-        response: Box::pin(async move {
-            let result = handle_rest(&bank_forks, path.as_str()).await;
-            match result {
-                Some(s) => Ok(hyper::Response::builder()
+    // For REST endpoints, we need to handle them synchronously since middleware doesn't support async
+    // Get data from the bank synchronously
+    match path {
+        "/v0/circulating-supply" => {
+            let bank = bank_forks.read().unwrap().root_bank();
+            // Use synchronous approach for circulating supply
+            let non_circulating = solana_runtime::non_circulating_supply::calculate_non_circulating_supply(&bank);
+            let total_supply = bank.capitalization();
+            let supply = match non_circulating {
+                Ok(non_circ) => total_supply.saturating_sub(non_circ.lamports),
+                Err(_) => return RequestMiddlewareAction::Respond {
+                    should_validate_hosts: true,
+                    response: RpcRequestMiddleware::not_found(),
+                },
+            };
+            RequestMiddlewareAction::Respond {
+                should_validate_hosts: true,
+                response: hyper::Response::builder()
                     .status(hyper::StatusCode::OK)
-                    .body(hyper::Body::from(s))
-                    .unwrap()),
-                None => Ok(RpcRequestMiddleware::not_found()),
+                    .body(hyper::Body::from(build_balance_message(supply, false, false)))
+                    .unwrap(),
             }
-        }),
+        }
+        "/v0/total-supply" => {
+            let bank = bank_forks.read().unwrap().root_bank();
+            let total_supply = bank.capitalization();
+            RequestMiddlewareAction::Respond {
+                should_validate_hosts: true,
+                response: hyper::Response::builder()
+                    .status(hyper::StatusCode::OK)
+                    .body(hyper::Body::from(build_balance_message(total_supply, false, false)))
+                    .unwrap(),
+            }
+        }
+        _ => RequestMiddlewareAction::Respond {
+            should_validate_hosts: true,
+            response: RpcRequestMiddleware::not_found(),
+        },
     }
 }
 
@@ -732,20 +755,20 @@ impl JsonRpcService {
                 
                 // Add RPC methods
                 let minimal_server = rpc_minimal::MinimalRpcServer::new(request_processor.clone());
-                module.merge(minimal_server.into_rpc()).expect("Failed to merge minimal RPC");
+                module.merge(rpc_minimal::MinimalApiServer::into_rpc(minimal_server)).expect("Failed to merge minimal RPC");
                 
                 if full_api {
                     let bank_server = rpc_bank::BankDataRpcServer::new(request_processor.clone());
-                    module.merge(bank_server.into_rpc()).expect("Failed to merge bank RPC");
+                    module.merge(rpc_bank::BankDataApiServer::into_rpc(bank_server)).expect("Failed to merge bank RPC");
                     
                     let accounts_server = rpc_accounts::AccountsDataRpcServer::new(request_processor.clone());
-                    module.merge(accounts_server.into_rpc()).expect("Failed to merge accounts RPC");
+                    module.merge(rpc_accounts::AccountsDataApiServer::into_rpc(accounts_server)).expect("Failed to merge accounts RPC");
                     
                     let accounts_scan_server = rpc_accounts_scan::AccountsScanRpcServer::new(request_processor.clone());
-                    module.merge(accounts_scan_server.into_rpc()).expect("Failed to merge accounts scan RPC");
+                    module.merge(rpc_accounts_scan::AccountsScanApiServer::into_rpc(accounts_scan_server)).expect("Failed to merge accounts scan RPC");
                     
                     let full_server = rpc_full::FullRpcServer::new(request_processor.clone());
-                    module.merge(full_server.into_rpc()).expect("Failed to merge full RPC");
+                    module.merge(rpc_full::FullApiServer::into_rpc(full_server)).expect("Failed to merge full RPC");
                 }
 
                 let request_middleware = RpcRequestMiddleware::new(
@@ -757,8 +780,11 @@ impl JsonRpcService {
                 
                 // Build and start jsonrpsee server
                 let server_result = runtime.block_on(async {
-                    ServerBuilder::new()
+                    let config = jsonrpsee::server::ServerConfig::builder()
                         .max_request_body_size(max_request_body_size as u32)
+                        .build();
+                    ServerBuilder::new()
+                        .set_config(config)
                         .build(rpc_addr)
                         .await
                 });

@@ -2482,8 +2482,8 @@ fn verify_and_parse_signatures_for_address_params(
 pub(crate) fn check_is_at_least_confirmed(commitment: CommitmentConfig) -> RpcResult<()> {
     if !commitment.is_at_least_confirmed() {
         return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
-            "Method does not support commitment below `confirmed`",
-        , None::<()>));
+            "Method does not support commitment below `confirmed`".to_string(),
+            None::<()>));
     }
     Ok(())
 }
@@ -3958,8 +3958,8 @@ pub mod rpc_full {
             if replace_recent_blockhash {
                 if sig_verify {
                     return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
-                        "sigVerify may not be used with replaceRecentBlockhash",
-                    , None::<()>));
+                        "sigVerify may not be used with replaceRecentBlockhash".to_string(),
+                        None::<()>));
                 }
                 let recent_blockhash = bank.last_blockhash();
                 unsanitized_tx
