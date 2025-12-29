@@ -138,9 +138,6 @@ pub mod account_resolver;
 
 type RpcCustomResult<T> = std::result::Result<T, RpcCustomError>;
 
-/// Result type for RPC methods - using RpcResult to avoid conflicts with std::result::Result
-pub type RpcResult<T> = std::result::Result<T, ErrorObjectOwned>;
-
 /// Error type for RPC methods  
 pub type RpcError = ErrorObjectOwned;
 

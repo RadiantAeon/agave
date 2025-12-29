@@ -1,6 +1,7 @@
 use {
     crate::rpc::account_resolver,
-    jsonrpc_core::{Error, Result},
+    jsonrpsee::core::RpcResult,
+    jsonrpsee::types::ErrorObjectOwned,
     solana_account::{AccountSharedData, ReadableAccount},
     solana_account_decoder::{
         encode_ui_account,
@@ -20,6 +21,12 @@ use {
     },
     std::{collections::HashMap, sync::Arc},
 };
+
+/// Result type for parsed token account operations
+pub type Result<T> = RpcResult<T>;
+
+/// Error type for parsed token account operations
+pub type Error = ErrorObjectOwned;
 
 pub fn get_parsed_token_account(
     bank: &Bank,
