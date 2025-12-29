@@ -3,7 +3,7 @@
 use crate::{rpc_pubsub_service, rpc_subscriptions::RpcSubscriptions};
 use {
     crate::{
-        rpc::{check_is_at_least_confirmed, optimize_filters, verify_filters},
+        rpc::{check_is_at_least_confirmed, optimize_filters, verify_filters, RpcResult, RpcError},
         rpc_pubsub_service::PubSubConfig,
         rpc_subscription_tracker::{
             AccountSubscriptionParams, BlockSubscriptionKind, BlockSubscriptionParams,
@@ -13,9 +13,12 @@ use {
         },
     },
     dashmap::DashMap,
-    jsonrpc_core::{Error, ErrorCode, Result},
-    jsonrpc_derive::rpc,
-    jsonrpc_pubsub::{typed::Subscriber, SubscriptionId as PubSubSubscriptionId},
+    jsonrpsee::{
+        core::{async_trait, SubscriptionResult},
+        proc_macros::rpc,
+        types::ErrorObjectOwned,
+        PendingSubscriptionSink,
+    },
     solana_account_decoder::{UiAccount, UiAccountEncoding},
     solana_clock::Slot,
     solana_pubkey::Pubkey,

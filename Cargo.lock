@@ -10090,6 +10090,8 @@ dependencies = [
  "bs58",
  "crossbeam-channel",
  "dashmap",
+ "futures",
+ "hyper 0.14.32",
  "itertools 0.14.0",
  "jsonrpsee",
  "jsonrpsee-core",

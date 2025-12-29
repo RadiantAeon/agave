@@ -138,11 +138,11 @@ pub mod account_resolver;
 
 type RpcCustomResult<T> = std::result::Result<T, RpcCustomError>;
 
-/// Result type for RPC methods
-pub type Result<T> = std::result::Result<T, ErrorObjectOwned>;
+/// Result type for RPC methods - using RpcResult to avoid conflicts with std::result::Result
+pub type RpcResult<T> = std::result::Result<T, ErrorObjectOwned>;
 
 /// Error type for RPC methods  
-pub type Error = ErrorObjectOwned;
+pub type RpcError = ErrorObjectOwned;
 
 pub const MAX_REQUEST_BODY_SIZE: usize = 50 * (1 << 10); // 50kB
 pub const PERFORMANCE_SAMPLES_LIMIT: usize = 720;
