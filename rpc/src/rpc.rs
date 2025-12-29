@@ -3165,130 +3165,124 @@ pub mod rpc_bank {
 // Expected to be provided by API nodes
 pub mod rpc_accounts {
     use super::*;
-    #[rpc]
-    pub trait AccountsData {
-        type Metadata;
 
-        #[rpc(meta, name = "getAccountInfo")]
-        fn get_account_info(
+    /// RPC implementation for accounts data
+    pub struct AccountsDataRpcServer {
+        pub request_processor: JsonRpcRequestProcessor,
+    }
+
+    impl AccountsDataRpcServer {
+        pub fn new(request_processor: JsonRpcRequestProcessor) -> Self {
+            Self { request_processor }
+        }
+    }
+
+    #[rpc(server)]
+    pub trait AccountsDataApi {
+        #[method(name = "getAccountInfo")]
+        async fn get_account_info(
             &self,
-            meta: Self::Metadata,
             pubkey_str: String,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Option<UiAccount>>>>;
+        ) -> RpcResult<RpcResponse<Option<UiAccount>>>;
 
-        #[rpc(meta, name = "getMultipleAccounts")]
-        fn get_multiple_accounts(
+        #[method(name = "getMultipleAccounts")]
+        async fn get_multiple_accounts(
             &self,
-            meta: Self::Metadata,
             pubkey_strs: Vec<String>,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<Option<UiAccount>>>>>;
+        ) -> RpcResult<RpcResponse<Vec<Option<UiAccount>>>>;
 
-        #[rpc(meta, name = "getBlockCommitment")]
-        fn get_block_commitment(
+        #[method(name = "getBlockCommitment")]
+        async fn get_block_commitment(
             &self,
-            meta: Self::Metadata,
             block: Slot,
-        ) -> Result<RpcBlockCommitment<BlockCommitmentArray>>;
+        ) -> RpcResult<RpcBlockCommitment<BlockCommitmentArray>>;
 
         // SPL Token-specific RPC endpoints
         // See https://github.com/solana-labs/solana-program-library/releases/tag/token-v2.0.0 for
         // program details
 
-        #[rpc(meta, name = "getTokenAccountBalance")]
-        fn get_token_account_balance(
+        #[method(name = "getTokenAccountBalance")]
+        async fn get_token_account_balance(
             &self,
-            meta: Self::Metadata,
             pubkey_str: String,
             commitment: Option<CommitmentConfig>,
-        ) -> Result<RpcResponse<UiTokenAmount>>;
+        ) -> RpcResult<RpcResponse<UiTokenAmount>>;
 
-        #[rpc(meta, name = "getTokenSupply")]
-        fn get_token_supply(
+        #[method(name = "getTokenSupply")]
+        async fn get_token_supply(
             &self,
-            meta: Self::Metadata,
             mint_str: String,
             commitment: Option<CommitmentConfig>,
-        ) -> Result<RpcResponse<UiTokenAmount>>;
+        ) -> RpcResult<RpcResponse<UiTokenAmount>>;
     }
 
-    pub struct AccountsDataImpl;
-    impl AccountsData for AccountsDataImpl {
-        type Metadata = JsonRpcRequestProcessor;
-
-        fn get_account_info(
+    #[async_trait]
+    impl AccountsDataApiServer for AccountsDataRpcServer {
+        async fn get_account_info(
             &self,
-            meta: Self::Metadata,
             pubkey_str: String,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Option<UiAccount>>>> {
+        ) -> RpcResult<RpcResponse<Option<UiAccount>>> {
             debug!("get_account_info rpc request received: {pubkey_str:?}");
-            async move {
-                let pubkey = verify_pubkey(&pubkey_str)?;
-                meta.get_account_info(pubkey, config).await
-            }
-            .boxed()
+            let pubkey = verify_pubkey(&pubkey_str)?;
+            self.request_processor.get_account_info(pubkey, config).await
         }
 
-        fn get_multiple_accounts(
+        async fn get_multiple_accounts(
             &self,
-            meta: Self::Metadata,
             pubkey_strs: Vec<String>,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<Option<UiAccount>>>>> {
+        ) -> RpcResult<RpcResponse<Vec<Option<UiAccount>>>> {
             debug!(
                 "get_multiple_accounts rpc request received: {:?}",
                 pubkey_strs.len()
             );
-            async move {
-                let max_multiple_accounts = meta
-                    .config
-                    .max_multiple_accounts
-                    .unwrap_or(MAX_MULTIPLE_ACCOUNTS);
-                if pubkey_strs.len() > max_multiple_accounts {
-                    return Err(Error::invalid_params(format!(
-                        "Too many inputs provided; max {max_multiple_accounts}"
-                    )));
-                }
-                let pubkeys = pubkey_strs
-                    .into_iter()
-                    .map(|pubkey_str| verify_pubkey(&pubkey_str))
-                    .collect::<Result<Vec<_>>>()?;
-                meta.get_multiple_accounts(pubkeys, config).await
+            let max_multiple_accounts = self.request_processor
+                .config
+                .max_multiple_accounts
+                .unwrap_or(MAX_MULTIPLE_ACCOUNTS);
+            if pubkey_strs.len() > max_multiple_accounts {
+                return Err(ErrorObject::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!("Too many inputs provided; max {max_multiple_accounts}"),
+                    None::<()>,
+                ));
             }
-            .boxed()
+            let pubkeys = pubkey_strs
+                .into_iter()
+                .map(|pubkey_str| verify_pubkey(&pubkey_str))
+                .collect::<RpcResult<Vec<_>>>()?;
+            self.request_processor.get_multiple_accounts(pubkeys, config).await
         }
 
-        fn get_block_commitment(
+        async fn get_block_commitment(
             &self,
-            meta: Self::Metadata,
             block: Slot,
-        ) -> Result<RpcBlockCommitment<BlockCommitmentArray>> {
+        ) -> RpcResult<RpcBlockCommitment<BlockCommitmentArray>> {
             debug!("get_block_commitment rpc request received");
-            Ok(meta.get_block_commitment(block))
+            Ok(self.request_processor.get_block_commitment(block))
         }
 
-        fn get_token_account_balance(
+        async fn get_token_account_balance(
             &self,
-            meta: Self::Metadata,
             pubkey_str: String,
             commitment: Option<CommitmentConfig>,
-        ) -> Result<RpcResponse<UiTokenAmount>> {
+        ) -> RpcResult<RpcResponse<UiTokenAmount>> {
             debug!("get_token_account_balance rpc request received: {pubkey_str:?}");
             let pubkey = verify_pubkey(&pubkey_str)?;
-            meta.get_token_account_balance(&pubkey, commitment)
+            self.request_processor.get_token_account_balance(&pubkey, commitment)
         }
 
-        fn get_token_supply(
+        async fn get_token_supply(
             &self,
-            meta: Self::Metadata,
             mint_str: String,
             commitment: Option<CommitmentConfig>,
-        ) -> Result<RpcResponse<UiTokenAmount>> {
+        ) -> RpcResult<RpcResponse<UiTokenAmount>> {
             debug!("get_token_supply rpc request received: {mint_str:?}");
             let mint = verify_pubkey(&mint_str)?;
-            meta.get_token_supply(&mint, commitment)
+            self.request_processor.get_token_supply(&mint, commitment)
         }
     }
 }
@@ -3298,157 +3292,141 @@ pub mod rpc_accounts {
 // the future.
 pub mod rpc_accounts_scan {
     use super::*;
-    #[rpc]
-    pub trait AccountsScan {
-        type Metadata;
 
-        #[rpc(meta, name = "getProgramAccounts")]
-        fn get_program_accounts(
+    /// RPC implementation for accounts scan
+    pub struct AccountsScanRpcServer {
+        pub request_processor: JsonRpcRequestProcessor,
+    }
+
+    impl AccountsScanRpcServer {
+        pub fn new(request_processor: JsonRpcRequestProcessor) -> Self {
+            Self { request_processor }
+        }
+    }
+
+    #[rpc(server)]
+    pub trait AccountsScanApi {
+        #[method(name = "getProgramAccounts")]
+        async fn get_program_accounts(
             &self,
-            meta: Self::Metadata,
             program_id_str: String,
             config: Option<RpcProgramAccountsConfig>,
-        ) -> BoxFuture<Result<OptionalContext<Vec<RpcKeyedAccount>>>>;
+        ) -> RpcResult<OptionalContext<Vec<RpcKeyedAccount>>>;
 
-        #[rpc(meta, name = "getLargestAccounts")]
-        fn get_largest_accounts(
+        #[method(name = "getLargestAccounts")]
+        async fn get_largest_accounts(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcLargestAccountsConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcAccountBalance>>>>;
+        ) -> RpcResult<RpcResponse<Vec<RpcAccountBalance>>>;
 
-        #[rpc(meta, name = "getSupply")]
-        fn get_supply(
+        #[method(name = "getSupply")]
+        async fn get_supply(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcSupplyConfig>,
-        ) -> BoxFuture<Result<RpcResponse<RpcSupply>>>;
+        ) -> RpcResult<RpcResponse<RpcSupply>>;
 
         // SPL Token-specific RPC endpoints
         // See https://github.com/solana-labs/solana-program-library/releases/tag/token-v2.0.0 for
         // program details
 
-        #[rpc(meta, name = "getTokenLargestAccounts")]
-        fn get_token_largest_accounts(
+        #[method(name = "getTokenLargestAccounts")]
+        async fn get_token_largest_accounts(
             &self,
-            meta: Self::Metadata,
             mint_str: String,
             commitment: Option<CommitmentConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcTokenAccountBalance>>>>;
+        ) -> RpcResult<RpcResponse<Vec<RpcTokenAccountBalance>>>;
 
-        #[rpc(meta, name = "getTokenAccountsByOwner")]
-        fn get_token_accounts_by_owner(
+        #[method(name = "getTokenAccountsByOwner")]
+        async fn get_token_accounts_by_owner(
             &self,
-            meta: Self::Metadata,
             owner_str: String,
             token_account_filter: RpcTokenAccountsFilter,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcKeyedAccount>>>>;
+        ) -> RpcResult<RpcResponse<Vec<RpcKeyedAccount>>>;
 
-        #[rpc(meta, name = "getTokenAccountsByDelegate")]
-        fn get_token_accounts_by_delegate(
+        #[method(name = "getTokenAccountsByDelegate")]
+        async fn get_token_accounts_by_delegate(
             &self,
-            meta: Self::Metadata,
             delegate_str: String,
             token_account_filter: RpcTokenAccountsFilter,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcKeyedAccount>>>>;
+        ) -> RpcResult<RpcResponse<Vec<RpcKeyedAccount>>>;
     }
 
-    pub struct AccountsScanImpl;
-    impl AccountsScan for AccountsScanImpl {
-        type Metadata = JsonRpcRequestProcessor;
-
-        fn get_program_accounts(
+    #[async_trait]
+    impl AccountsScanApiServer for AccountsScanRpcServer {
+        async fn get_program_accounts(
             &self,
-            meta: Self::Metadata,
             program_id_str: String,
             config: Option<RpcProgramAccountsConfig>,
-        ) -> BoxFuture<Result<OptionalContext<Vec<RpcKeyedAccount>>>> {
+        ) -> RpcResult<OptionalContext<Vec<RpcKeyedAccount>>> {
             debug!("get_program_accounts rpc request received: {program_id_str:?}");
-            async move {
-                let program_id = verify_pubkey(&program_id_str)?;
-                let (config, filters, with_context, sort_results) = if let Some(config) = config {
-                    (
-                        Some(config.account_config),
-                        config.filters.unwrap_or_default(),
-                        config.with_context.unwrap_or_default(),
-                        config.sort_results.unwrap_or(true),
-                    )
-                } else {
-                    (None, vec![], false, true)
-                };
-                verify_filters(&filters)?;
-                meta.get_program_accounts(program_id, config, filters, with_context, sort_results)
-                    .await
-            }
-            .boxed()
+            let program_id = verify_pubkey(&program_id_str)?;
+            let (config, filters, with_context, sort_results) = if let Some(config) = config {
+                (
+                    Some(config.account_config),
+                    config.filters.unwrap_or_default(),
+                    config.with_context.unwrap_or_default(),
+                    config.sort_results.unwrap_or(true),
+                )
+            } else {
+                (None, vec![], false, true)
+            };
+            verify_filters(&filters)?;
+            self.request_processor.get_program_accounts(program_id, config, filters, with_context, sort_results)
+                .await
         }
 
-        fn get_largest_accounts(
+        async fn get_largest_accounts(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcLargestAccountsConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcAccountBalance>>>> {
+        ) -> RpcResult<RpcResponse<Vec<RpcAccountBalance>>> {
             debug!("get_largest_accounts rpc request received");
-            async move { Ok(meta.get_largest_accounts(config).await?) }.boxed()
+            Ok(self.request_processor.get_largest_accounts(config).await?)
         }
 
-        fn get_supply(
+        async fn get_supply(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcSupplyConfig>,
-        ) -> BoxFuture<Result<RpcResponse<RpcSupply>>> {
+        ) -> RpcResult<RpcResponse<RpcSupply>> {
             debug!("get_supply rpc request received");
-            async move { Ok(meta.get_supply(config).await?) }.boxed()
+            Ok(self.request_processor.get_supply(config).await?)
         }
 
-        fn get_token_largest_accounts(
+        async fn get_token_largest_accounts(
             &self,
-            meta: Self::Metadata,
             mint_str: String,
             commitment: Option<CommitmentConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcTokenAccountBalance>>>> {
+        ) -> RpcResult<RpcResponse<Vec<RpcTokenAccountBalance>>> {
             debug!("get_token_largest_accounts rpc request received: {mint_str:?}");
-            async move {
-                let mint = verify_pubkey(&mint_str)?;
-                meta.get_token_largest_accounts(mint, commitment).await
-            }
-            .boxed()
+            let mint = verify_pubkey(&mint_str)?;
+            self.request_processor.get_token_largest_accounts(mint, commitment).await
         }
 
-        fn get_token_accounts_by_owner(
+        async fn get_token_accounts_by_owner(
             &self,
-            meta: Self::Metadata,
             owner_str: String,
             token_account_filter: RpcTokenAccountsFilter,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcKeyedAccount>>>> {
+        ) -> RpcResult<RpcResponse<Vec<RpcKeyedAccount>>> {
             debug!("get_token_accounts_by_owner rpc request received: {owner_str:?}");
-            async move {
-                let owner = verify_pubkey(&owner_str)?;
-                let token_account_filter = verify_token_account_filter(token_account_filter)?;
-                meta.get_token_accounts_by_owner(owner, token_account_filter, config, true)
-                    .await
-            }
-            .boxed()
+            let owner = verify_pubkey(&owner_str)?;
+            let token_account_filter = verify_token_account_filter(token_account_filter)?;
+            self.request_processor.get_token_accounts_by_owner(owner, token_account_filter, config, true)
+                .await
         }
 
-        fn get_token_accounts_by_delegate(
+        async fn get_token_accounts_by_delegate(
             &self,
-            meta: Self::Metadata,
             delegate_str: String,
             token_account_filter: RpcTokenAccountsFilter,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcKeyedAccount>>>> {
+        ) -> RpcResult<RpcResponse<Vec<RpcKeyedAccount>>> {
             debug!("get_token_accounts_by_delegate rpc request received: {delegate_str:?}");
-            async move {
-                let delegate = verify_pubkey(&delegate_str)?;
-                let token_account_filter = verify_token_account_filter(token_account_filter)?;
-                meta.get_token_accounts_by_delegate(delegate, token_account_filter, config, true)
-                    .await
-            }
-            .boxed()
+            let delegate = verify_pubkey(&delegate_str)?;
+            let token_account_filter = verify_token_account_filter(token_account_filter)?;
+            self.request_processor.get_token_accounts_by_delegate(delegate, token_account_filter, config, true)
+                .await
         }
     }
 }
