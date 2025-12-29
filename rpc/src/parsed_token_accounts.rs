@@ -1,7 +1,7 @@
 use {
     crate::rpc::account_resolver,
     jsonrpsee::core::RpcResult,
-    jsonrpsee::types::ErrorObjectOwned,
+    jsonrpsee::types::{ErrorCode, ErrorObject, ErrorObjectOwned},
     solana_account::{AccountSharedData, ReadableAccount},
     solana_account_decoder::{
         encode_ui_account,
@@ -25,8 +25,14 @@ use {
 /// Result type for parsed token account operations
 pub type Result<T> = RpcResult<T>;
 
-/// Error type for parsed token account operations
-pub type Error = ErrorObjectOwned;
+/// Helper to create invalid params error
+fn invalid_params_error(message: impl Into<String>) -> ErrorObjectOwned {
+    ErrorObject::owned(
+        ErrorCode::InvalidParams.code(),
+        message.into(),
+        None::<()>,
+    )
+}
 
 pub fn get_parsed_token_account(
     bank: &Bank,
@@ -108,7 +114,7 @@ pub(crate) fn get_mint_owner_and_additional_data(
         ))
     } else {
         let mint_account = bank.get_account(mint).ok_or_else(|| {
-            Error::invalid_params("Invalid param: could not find mint".to_string())
+            invalid_params_error("Invalid param: could not find mint".to_string())
         })?;
         let mint_data = get_additional_mint_data(bank, mint_account.data())?;
         Ok((*mint_account.owner(), mint_data))
@@ -118,7 +124,7 @@ pub(crate) fn get_mint_owner_and_additional_data(
 fn get_additional_mint_data(bank: &Bank, data: &[u8]) -> Result<SplTokenAdditionalDataV2> {
     StateWithExtensions::<Mint>::unpack(data)
         .map_err(|_| {
-            Error::invalid_params("Invalid param: Token mint could not be unpacked".to_string())
+            invalid_params_error("Invalid param: Token mint could not be unpacked".to_string())
         })
         .map(|mint| {
             let interest_bearing_config = mint
