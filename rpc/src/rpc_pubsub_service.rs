@@ -389,7 +389,7 @@ async fn handle_connection(
         subscription_control,
         Arc::clone(&current_subscriptions),
     );
-    let json_rpc_handler: RpcModule<()> = rpc_impl.into_rpc();
+    let json_rpc_handler = rpc_impl.into_rpc();
     let broadcast_handler = BroadcastHandler::new(current_subscriptions);
     loop {
         // Extra block for dropping `receive_future`.
@@ -434,8 +434,8 @@ async fn handle_connection(
 
         // Call the RPC method
         let response = json_rpc_handler.raw_json_request(data_str, 1).await;
-        if let Ok(resp) = response {
-            sender.send_text(&resp.result).await?;
+        if let Ok((resp, _stream)) = response {
+            sender.send_text(resp.get()).await?;
         }
         data.clear();
     }

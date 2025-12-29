@@ -333,28 +333,36 @@ impl RpcRequestMiddleware {
 
         RequestMiddlewareAction::Respond {
             should_validate_hosts: true,
-            response: Box::pin(async move {
-                match Self::open_no_follow(filename).await {
-                    Err(err) => Ok(if err.kind() == std::io::ErrorKind::NotFound {
+            response: {
+                // Use synchronous file opening for the middleware response
+                let file_result = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(false)
+                    .create(false)
+                    .open(&filename);
+                
+                match file_result {
+                    Err(err) => if err.kind() == std::io::ErrorKind::NotFound {
                         Self::not_found()
                     } else {
                         Self::internal_server_error()
-                    }),
+                    },
                     Ok(file) => {
+                        let tokio_file = tokio::fs::File::from_std(file);
                         let stream =
-                            FramedRead::new(file, BytesCodec::new()).map_ok(|b| b.freeze());
+                            FramedRead::new(tokio_file, BytesCodec::new()).map_ok(|b| b.freeze());
                         let body = if let Some(timeout) = snapshot_timeout {
                             hyper::Body::wrap_stream(TimeoutStream::new(stream, timeout))
                         } else {
                             hyper::Body::wrap_stream(stream)
                         };
-                        Ok(hyper::Response::builder()
+                        hyper::Response::builder()
                             .header(hyper::header::CONTENT_LENGTH, file_length)
                             .body(body)
-                            .unwrap())
+                            .unwrap()
                     }
                 }
-            }),
+            },
         }
     }
 
