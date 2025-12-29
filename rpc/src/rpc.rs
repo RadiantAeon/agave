@@ -11,12 +11,12 @@ use {
     base64::{prelude::BASE64_STANDARD, Engine},
     bincode::{config::Options, serialize},
     crossbeam_channel::{unbounded, Receiver, Sender},
-    jsonrpc_core::{
-        futures::future::{self, FutureExt, OptionFuture},
-        types::error,
-        BoxFuture, Error, Metadata, Result,
+    futures::future::{self, FutureExt, OptionFuture},
+    jsonrpsee::{
+        core::{async_trait, RpcResult},
+        proc_macros::rpc,
+        types::{error::ErrorCode, ErrorObject, ErrorObjectOwned},
     },
-    jsonrpc_derive::rpc,
     solana_account::{AccountSharedData, ReadableAccount},
     solana_account_decoder::{
         encode_ui_account,
@@ -138,6 +138,12 @@ pub mod account_resolver;
 
 type RpcCustomResult<T> = std::result::Result<T, RpcCustomError>;
 
+/// Result type for RPC methods
+pub type Result<T> = std::result::Result<T, ErrorObjectOwned>;
+
+/// Error type for RPC methods  
+pub type Error = ErrorObjectOwned;
+
 pub const MAX_REQUEST_BODY_SIZE: usize = 50 * (1 << 10); // 50kB
 pub const PERFORMANCE_SAMPLES_LIMIT: usize = 720;
 
@@ -255,7 +261,6 @@ pub struct JsonRpcRequestProcessor {
     prioritization_fee_cache: Option<Arc<PrioritizationFeeCache>>,
     runtime: Arc<Runtime>,
 }
-impl Metadata for JsonRpcRequestProcessor {}
 
 impl JsonRpcRequestProcessor {
     pub fn clone_without_bigtable(&self) -> JsonRpcRequestProcessor {

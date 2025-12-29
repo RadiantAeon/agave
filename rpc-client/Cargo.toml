@@ -57,8 +57,8 @@ tokio = { workspace = true, features = ["full"] }
 assert_matches = { workspace = true }
 crossbeam-channel = { workspace = true }
 futures = { workspace = true }
-jsonrpc-core = { workspace = true }
-jsonrpc-http-server = { workspace = true }
+jsonrpsee = { workspace = true }
+jsonrpsee-server = { workspace = true }
 solana-account-decoder = { workspace = true }
 solana-keypair = { workspace = true }
 solana-pubkey = { workspace = true, features = ["rand"] }
