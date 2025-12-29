@@ -29,10 +29,10 @@ crossbeam-channel = { workspace = true }
 fd-lock = { workspace = true }
 indicatif = { workspace = true }
 itertools = { workspace = true }
-jsonrpsee = { workspace = true }
-jsonrpsee-core = { workspace = true }
-jsonrpsee-server = { workspace = true }
-jsonrpsee-types = { workspace = true }
+jsonrpc-core = { workspace = true }
+jsonrpc-core-client = { workspace = true, features = ["ipc"] }
+jsonrpc-derive = { workspace = true }
+jsonrpc-ipc-server = { workspace = true }
 libc = { workspace = true }
 libloading = { workspace = true }
 log = { workspace = true }
