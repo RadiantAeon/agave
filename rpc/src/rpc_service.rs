@@ -64,6 +64,13 @@ use {
     },
 };
 
+// Placeholder types for middleware - to be implemented with tower middleware
+type RequestMiddlewareAction = Result<hyper::Response<hyper::Body>, String>;
+
+trait RequestMiddleware {
+    fn on_request(&self, request: hyper::Request<hyper::Body>) -> RequestMiddlewareAction;
+}
+
 const FULL_SNAPSHOT_REQUEST_PATH: &str = "/snapshot.tar.bz2";
 const INCREMENTAL_SNAPSHOT_REQUEST_PATH: &str = "/incremental-snapshot.tar.bz2";
 const LARGEST_ACCOUNTS_CACHE_DURATION: u64 = 60 * 60 * 2;

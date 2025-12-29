@@ -138,6 +138,9 @@ pub mod account_resolver;
 
 type RpcCustomResult<T> = std::result::Result<T, RpcCustomError>;
 
+/// Result type for RPC methods
+pub use jsonrpsee::core::RpcResult;
+
 /// Error type for RPC methods  
 pub type RpcError = ErrorObjectOwned;
 
