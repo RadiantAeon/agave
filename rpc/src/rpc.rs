@@ -2942,126 +2942,130 @@ pub mod rpc_minimal {
 // Expected to be provided by API nodes
 pub mod rpc_bank {
     use super::*;
-    #[rpc]
-    pub trait BankData {
-        type Metadata;
 
-        #[rpc(meta, name = "getMinimumBalanceForRentExemption")]
-        fn get_minimum_balance_for_rent_exemption(
-            &self,
-            meta: Self::Metadata,
-            data_len: usize,
-            commitment: Option<CommitmentConfig>,
-        ) -> Result<u64>;
-
-        #[rpc(meta, name = "getInflationGovernor")]
-        fn get_inflation_governor(
-            &self,
-            meta: Self::Metadata,
-            commitment: Option<CommitmentConfig>,
-        ) -> Result<RpcInflationGovernor>;
-
-        #[rpc(meta, name = "getInflationRate")]
-        fn get_inflation_rate(&self, meta: Self::Metadata) -> Result<RpcInflationRate>;
-
-        #[rpc(meta, name = "getEpochSchedule")]
-        fn get_epoch_schedule(&self, meta: Self::Metadata) -> Result<EpochSchedule>;
-
-        #[rpc(meta, name = "getSlotLeader")]
-        fn get_slot_leader(
-            &self,
-            meta: Self::Metadata,
-            config: Option<RpcContextConfig>,
-        ) -> Result<String>;
-
-        #[rpc(meta, name = "getSlotLeaders")]
-        fn get_slot_leaders(
-            &self,
-            meta: Self::Metadata,
-            start_slot: Slot,
-            limit: u64,
-        ) -> Result<Vec<String>>;
-
-        #[rpc(meta, name = "getBlockProduction")]
-        fn get_block_production(
-            &self,
-            meta: Self::Metadata,
-            config: Option<RpcBlockProductionConfig>,
-        ) -> Result<RpcResponse<RpcBlockProduction>>;
+    /// RPC implementation for bank data
+    pub struct BankDataRpcServer {
+        pub request_processor: JsonRpcRequestProcessor,
     }
 
-    pub struct BankDataImpl;
-    impl BankData for BankDataImpl {
-        type Metadata = JsonRpcRequestProcessor;
+    impl BankDataRpcServer {
+        pub fn new(request_processor: JsonRpcRequestProcessor) -> Self {
+            Self { request_processor }
+        }
+    }
 
-        fn get_minimum_balance_for_rent_exemption(
+    #[rpc(server)]
+    pub trait BankDataApi {
+        #[method(name = "getMinimumBalanceForRentExemption")]
+        async fn get_minimum_balance_for_rent_exemption(
             &self,
-            meta: Self::Metadata,
             data_len: usize,
             commitment: Option<CommitmentConfig>,
-        ) -> Result<u64> {
-            debug!("get_minimum_balance_for_rent_exemption rpc request received: {data_len:?}");
-            if data_len as u64 > solana_system_interface::MAX_PERMITTED_DATA_LENGTH {
-                return Err(Error::invalid_request());
-            }
-            Ok(meta.get_minimum_balance_for_rent_exemption(data_len, commitment))
-        }
+        ) -> RpcResult<u64>;
 
-        fn get_inflation_governor(
+        #[method(name = "getInflationGovernor")]
+        async fn get_inflation_governor(
             &self,
-            meta: Self::Metadata,
             commitment: Option<CommitmentConfig>,
-        ) -> Result<RpcInflationGovernor> {
-            debug!("get_inflation_governor rpc request received");
-            Ok(meta.get_inflation_governor(commitment))
-        }
+        ) -> RpcResult<RpcInflationGovernor>;
 
-        fn get_inflation_rate(&self, meta: Self::Metadata) -> Result<RpcInflationRate> {
-            debug!("get_inflation_rate rpc request received");
-            Ok(meta.get_inflation_rate())
-        }
+        #[method(name = "getInflationRate")]
+        async fn get_inflation_rate(&self) -> RpcResult<RpcInflationRate>;
 
-        fn get_epoch_schedule(&self, meta: Self::Metadata) -> Result<EpochSchedule> {
-            debug!("get_epoch_schedule rpc request received");
-            Ok(meta.get_epoch_schedule())
-        }
+        #[method(name = "getEpochSchedule")]
+        async fn get_epoch_schedule(&self) -> RpcResult<EpochSchedule>;
 
-        fn get_slot_leader(
+        #[method(name = "getSlotLeader")]
+        async fn get_slot_leader(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcContextConfig>,
-        ) -> Result<String> {
-            debug!("get_slot_leader rpc request received");
-            meta.get_slot_leader(config.unwrap_or_default())
-        }
+        ) -> RpcResult<String>;
 
-        fn get_slot_leaders(
+        #[method(name = "getSlotLeaders")]
+        async fn get_slot_leaders(
             &self,
-            meta: Self::Metadata,
             start_slot: Slot,
             limit: u64,
-        ) -> Result<Vec<String>> {
+        ) -> RpcResult<Vec<String>>;
+
+        #[method(name = "getBlockProduction")]
+        async fn get_block_production(
+            &self,
+            config: Option<RpcBlockProductionConfig>,
+        ) -> RpcResult<RpcResponse<RpcBlockProduction>>;
+    }
+
+    #[async_trait]
+    impl BankDataApiServer for BankDataRpcServer {
+        async fn get_minimum_balance_for_rent_exemption(
+            &self,
+            data_len: usize,
+            commitment: Option<CommitmentConfig>,
+        ) -> RpcResult<u64> {
+            debug!("get_minimum_balance_for_rent_exemption rpc request received: {data_len:?}");
+            if data_len as u64 > solana_system_interface::MAX_PERMITTED_DATA_LENGTH {
+                return Err(ErrorObject::owned(
+                    ErrorCode::InvalidRequest.code(),
+                    "Invalid request".to_string(),
+                    None::<()>,
+                ));
+            }
+            Ok(self.request_processor.get_minimum_balance_for_rent_exemption(data_len, commitment))
+        }
+
+        async fn get_inflation_governor(
+            &self,
+            commitment: Option<CommitmentConfig>,
+        ) -> RpcResult<RpcInflationGovernor> {
+            debug!("get_inflation_governor rpc request received");
+            Ok(self.request_processor.get_inflation_governor(commitment))
+        }
+
+        async fn get_inflation_rate(&self) -> RpcResult<RpcInflationRate> {
+            debug!("get_inflation_rate rpc request received");
+            Ok(self.request_processor.get_inflation_rate())
+        }
+
+        async fn get_epoch_schedule(&self) -> RpcResult<EpochSchedule> {
+            debug!("get_epoch_schedule rpc request received");
+            Ok(self.request_processor.get_epoch_schedule())
+        }
+
+        async fn get_slot_leader(
+            &self,
+            config: Option<RpcContextConfig>,
+        ) -> RpcResult<String> {
+            debug!("get_slot_leader rpc request received");
+            self.request_processor.get_slot_leader(config.unwrap_or_default())
+        }
+
+        async fn get_slot_leaders(
+            &self,
+            start_slot: Slot,
+            limit: u64,
+        ) -> RpcResult<Vec<String>> {
             debug!("get_slot_leaders rpc request received (start: {start_slot} limit: {limit})");
 
             let limit = limit as usize;
             if limit > MAX_GET_SLOT_LEADERS {
-                return Err(Error::invalid_params(format!(
-                    "Invalid limit; max {MAX_GET_SLOT_LEADERS}"
-                )));
+                return Err(ErrorObject::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!("Invalid limit; max {MAX_GET_SLOT_LEADERS}"),
+                    None::<()>,
+                ));
             }
 
-            Ok(meta
+            Ok(self.request_processor
                 .get_slot_leaders(None, start_slot, limit)?
                 .into_iter()
                 .map(|identity| identity.to_string())
                 .collect())
         }
 
-        fn get_block_production(
+        async fn get_block_production(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcBlockProductionConfig>,
-        ) -> Result<RpcResponse<RpcBlockProduction>> {
+        ) -> RpcResult<RpcResponse<RpcBlockProduction>> {
             debug!("get_block_production rpc request received");
 
             let config = config.unwrap_or_default();
@@ -3071,7 +3075,7 @@ pub mod rpc_bank {
                 None
             };
 
-            let bank = meta.bank(config.commitment);
+            let bank = self.request_processor.bank(config.commitment);
             let (first_slot, last_slot) = match config.range {
                 None => (
                     bank.epoch_schedule().get_first_slot_in_epoch(bank.epoch()),
@@ -3081,9 +3085,11 @@ pub mod rpc_bank {
                     let first_slot = range.first_slot;
                     let last_slot = range.last_slot.unwrap_or_else(|| bank.slot());
                     if last_slot < first_slot {
-                        return Err(Error::invalid_params(format!(
-                            "lastSlot, {last_slot}, cannot be less than firstSlot, {first_slot}"
-                        )));
+                        return Err(ErrorObject::owned(
+                            ErrorCode::InvalidParams.code(),
+                            format!("lastSlot, {last_slot}, cannot be less than firstSlot, {first_slot}"),
+                            None::<()>,
+                        ));
                     }
                     (first_slot, last_slot)
                 }
@@ -3091,21 +3097,29 @@ pub mod rpc_bank {
 
             let slot_history = bank.get_slot_history();
             if first_slot < slot_history.oldest() {
-                return Err(Error::invalid_params(format!(
-                    "firstSlot, {}, is too small; min {}",
-                    first_slot,
-                    slot_history.oldest()
-                )));
+                return Err(ErrorObject::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!(
+                        "firstSlot, {}, is too small; min {}",
+                        first_slot,
+                        slot_history.oldest()
+                    ),
+                    None::<()>,
+                ));
             }
             if last_slot > slot_history.newest() {
-                return Err(Error::invalid_params(format!(
-                    "lastSlot, {}, is too large; max {}",
-                    last_slot,
-                    slot_history.newest()
-                )));
+                return Err(ErrorObject::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!(
+                        "lastSlot, {}, is too large; max {}",
+                        last_slot,
+                        slot_history.newest()
+                    ),
+                    None::<()>,
+                ));
             }
 
-            let slot_leaders = meta.get_slot_leaders(
+            let slot_leaders = self.request_processor.get_slot_leaders(
                 config.commitment,
                 first_slot,
                 last_slot.saturating_sub(first_slot) as usize + 1, // +1 because last_slot is inclusive
