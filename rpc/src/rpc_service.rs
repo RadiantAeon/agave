@@ -5,7 +5,14 @@ use {
         cluster_tpu_info::ClusterTpuInfo,
         max_slots::MaxSlots,
         optimistically_confirmed_bank_tracker::OptimisticallyConfirmedBank,
-        rpc::{rpc_accounts::*, rpc_accounts_scan::*, rpc_bank::*, rpc_full::*, rpc_minimal::*, *},
+        rpc::{
+            rpc_accounts::{AccountsDataApiServer, AccountsDataRpcServer},
+            rpc_accounts_scan::{AccountsScanApiServer, AccountsScanRpcServer},
+            rpc_bank::{BankDataApiServer, BankDataRpcServer},
+            rpc_full::{FullApiServer, FullRpcServer},
+            rpc_minimal::{MinimalApiServer, MinimalRpcServer},
+            *
+        },
         rpc_cache::LargestAccountsCache,
         rpc_health::*,
     },
@@ -64,8 +71,26 @@ use {
     },
 };
 
-// Placeholder types for middleware - to be implemented with tower middleware
-type RequestMiddlewareAction = Result<hyper::Response<hyper::Body>, String>;
+// Placeholder enum for middleware actions - to be implemented with tower middleware
+enum RequestMiddlewareAction {
+    Proceed,
+    Respond {
+        response: hyper::Response<hyper::Body>,
+        should_validate_hosts: bool,
+    },
+}
+
+impl From<hyper::Response<hyper::Body>> for RequestMiddlewareAction {
+    fn from(response: hyper::Response<hyper::Body>) -> Self {
+        RequestMiddlewareAction::Respond { response, should_validate_hosts: true }
+    }
+}
+
+impl From<hyper::Request<hyper::Body>> for RequestMiddlewareAction {
+    fn from(_request: hyper::Request<hyper::Body>) -> Self {
+        RequestMiddlewareAction::Proceed
+    }
+}
 
 trait RequestMiddleware {
     fn on_request(&self, request: hyper::Request<hyper::Body>) -> RequestMiddlewareAction;

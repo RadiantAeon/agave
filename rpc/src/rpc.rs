@@ -4362,9 +4362,9 @@ where
         .map_err(|err| {
             ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                 "failed to deserialize {}: {}",
-                type_name::<T>(, None::<()>),
+                type_name::<T>(),
                 &err.to_string()
-            ))
+            ), None::<()>)
         })
         .map(|output| (wire_output, output))
 }
