@@ -2534,11 +2534,11 @@ fn encode_account<T: ReadableAccount>(
             "Encoded binary (base 58) data should be less than {MAX_BASE58_BYTES} bytes, please \
              use Base64 encoding."
         );
-        Err(error::Error {
-            code: error::ErrorCode::InvalidRequest,
+        Err(ErrorObject::owned(
+            ErrorCode::InvalidRequest.code(),
             message,
-            data: None,
-        })
+            None::<()>,
+        ))
     } else {
         Ok(encode_ui_account(
             pubkey, account, encoding, None, data_slice,
