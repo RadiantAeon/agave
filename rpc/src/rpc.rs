@@ -3439,165 +3439,156 @@ pub mod rpc_full {
         solana_message::{SanitizedVersionedMessage, VersionedMessage},
         solana_transaction_status::{parse_ui_inner_instructions, UiLoadedAddresses},
     };
-    #[rpc]
-    pub trait Full {
-        type Metadata;
 
-        #[rpc(meta, name = "getInflationReward")]
-        fn get_inflation_reward(
+    /// RPC implementation for full API
+    pub struct FullRpcServer {
+        pub request_processor: JsonRpcRequestProcessor,
+    }
+
+    impl FullRpcServer {
+        pub fn new(request_processor: JsonRpcRequestProcessor) -> Self {
+            Self { request_processor }
+        }
+    }
+
+    #[rpc(server)]
+    pub trait FullApi {
+        #[method(name = "getInflationReward")]
+        async fn get_inflation_reward(
             &self,
-            meta: Self::Metadata,
             address_strs: Vec<String>,
             config: Option<RpcEpochConfig>,
-        ) -> BoxFuture<Result<Vec<Option<RpcInflationReward>>>>;
+        ) -> RpcResult<Vec<Option<RpcInflationReward>>>;
 
-        #[rpc(meta, name = "getClusterNodes")]
-        fn get_cluster_nodes(&self, meta: Self::Metadata) -> Result<Vec<RpcContactInfo>>;
+        #[method(name = "getClusterNodes")]
+        async fn get_cluster_nodes(&self) -> RpcResult<Vec<RpcContactInfo>>;
 
-        #[rpc(meta, name = "getRecentPerformanceSamples")]
-        fn get_recent_performance_samples(
+        #[method(name = "getRecentPerformanceSamples")]
+        async fn get_recent_performance_samples(
             &self,
-            meta: Self::Metadata,
             limit: Option<usize>,
-        ) -> Result<Vec<RpcPerfSample>>;
+        ) -> RpcResult<Vec<RpcPerfSample>>;
 
-        #[rpc(meta, name = "getSignatureStatuses")]
-        fn get_signature_statuses(
+        #[method(name = "getSignatureStatuses")]
+        async fn get_signature_statuses(
             &self,
-            meta: Self::Metadata,
             signature_strs: Vec<String>,
             config: Option<RpcSignatureStatusConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<Option<TransactionStatus>>>>>;
+        ) -> RpcResult<RpcResponse<Vec<Option<TransactionStatus>>>>;
 
-        #[rpc(meta, name = "getMaxRetransmitSlot")]
-        fn get_max_retransmit_slot(&self, meta: Self::Metadata) -> Result<Slot>;
+        #[method(name = "getMaxRetransmitSlot")]
+        async fn get_max_retransmit_slot(&self) -> RpcResult<Slot>;
 
-        #[rpc(meta, name = "getMaxShredInsertSlot")]
-        fn get_max_shred_insert_slot(&self, meta: Self::Metadata) -> Result<Slot>;
+        #[method(name = "getMaxShredInsertSlot")]
+        async fn get_max_shred_insert_slot(&self) -> RpcResult<Slot>;
 
-        #[rpc(meta, name = "requestAirdrop")]
-        fn request_airdrop(
+        #[method(name = "requestAirdrop")]
+        async fn request_airdrop(
             &self,
-            meta: Self::Metadata,
             pubkey_str: String,
             lamports: u64,
             config: Option<RpcRequestAirdropConfig>,
-        ) -> Result<String>;
+        ) -> RpcResult<String>;
 
-        #[rpc(meta, name = "sendTransaction")]
-        fn send_transaction(
+        #[method(name = "sendTransaction")]
+        async fn send_transaction(
             &self,
-            meta: Self::Metadata,
             data: String,
             config: Option<RpcSendTransactionConfig>,
-        ) -> Result<String>;
+        ) -> RpcResult<String>;
 
-        #[rpc(meta, name = "simulateTransaction")]
-        fn simulate_transaction(
+        #[method(name = "simulateTransaction")]
+        async fn simulate_transaction(
             &self,
-            meta: Self::Metadata,
             data: String,
             config: Option<RpcSimulateTransactionConfig>,
-        ) -> Result<RpcResponse<RpcSimulateTransactionResult>>;
+        ) -> RpcResult<RpcResponse<RpcSimulateTransactionResult>>;
 
-        #[rpc(meta, name = "minimumLedgerSlot")]
-        fn minimum_ledger_slot(&self, meta: Self::Metadata) -> Result<Slot>;
+        #[method(name = "minimumLedgerSlot")]
+        async fn minimum_ledger_slot(&self) -> RpcResult<Slot>;
 
-        #[rpc(meta, name = "getBlock")]
-        fn get_block(
+        #[method(name = "getBlock")]
+        async fn get_block(
             &self,
-            meta: Self::Metadata,
             slot: Slot,
             config: Option<RpcEncodingConfigWrapper<RpcBlockConfig>>,
-        ) -> BoxFuture<Result<Option<UiConfirmedBlock>>>;
+        ) -> RpcResult<Option<UiConfirmedBlock>>;
 
-        #[rpc(meta, name = "getBlockTime")]
-        fn get_block_time(
+        #[method(name = "getBlockTime")]
+        async fn get_block_time(
             &self,
-            meta: Self::Metadata,
             slot: Slot,
-        ) -> BoxFuture<Result<Option<UnixTimestamp>>>;
+        ) -> RpcResult<Option<UnixTimestamp>>;
 
-        #[rpc(meta, name = "getBlocks")]
-        fn get_blocks(
+        #[method(name = "getBlocks")]
+        async fn get_blocks(
             &self,
-            meta: Self::Metadata,
             start_slot: Slot,
             wrapper: Option<RpcBlocksConfigWrapper>,
             config: Option<RpcContextConfig>,
-        ) -> BoxFuture<Result<Vec<Slot>>>;
+        ) -> RpcResult<Vec<Slot>>;
 
-        #[rpc(meta, name = "getBlocksWithLimit")]
-        fn get_blocks_with_limit(
+        #[method(name = "getBlocksWithLimit")]
+        async fn get_blocks_with_limit(
             &self,
-            meta: Self::Metadata,
             start_slot: Slot,
             limit: usize,
             config: Option<RpcContextConfig>,
-        ) -> BoxFuture<Result<Vec<Slot>>>;
+        ) -> RpcResult<Vec<Slot>>;
 
-        #[rpc(meta, name = "getTransaction")]
-        fn get_transaction(
+        #[method(name = "getTransaction")]
+        async fn get_transaction(
             &self,
-            meta: Self::Metadata,
             signature_str: String,
             config: Option<RpcEncodingConfigWrapper<RpcTransactionConfig>>,
-        ) -> BoxFuture<Result<Option<EncodedConfirmedTransactionWithStatusMeta>>>;
+        ) -> RpcResult<Option<EncodedConfirmedTransactionWithStatusMeta>>;
 
-        #[rpc(meta, name = "getSignaturesForAddress")]
-        fn get_signatures_for_address(
+        #[method(name = "getSignaturesForAddress")]
+        async fn get_signatures_for_address(
             &self,
-            meta: Self::Metadata,
             address: String,
             config: Option<RpcSignaturesForAddressConfig>,
-        ) -> BoxFuture<Result<Vec<RpcConfirmedTransactionStatusWithSignature>>>;
+        ) -> RpcResult<Vec<RpcConfirmedTransactionStatusWithSignature>>;
 
-        #[rpc(meta, name = "getFirstAvailableBlock")]
-        fn get_first_available_block(&self, meta: Self::Metadata) -> BoxFuture<Result<Slot>>;
+        #[method(name = "getFirstAvailableBlock")]
+        async fn get_first_available_block(&self) -> RpcResult<Slot>;
 
-        #[rpc(meta, name = "getLatestBlockhash")]
-        fn get_latest_blockhash(
+        #[method(name = "getLatestBlockhash")]
+        async fn get_latest_blockhash(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<RpcBlockhash>>;
+        ) -> RpcResult<RpcResponse<RpcBlockhash>>;
 
-        #[rpc(meta, name = "isBlockhashValid")]
-        fn is_blockhash_valid(
+        #[method(name = "isBlockhashValid")]
+        async fn is_blockhash_valid(
             &self,
-            meta: Self::Metadata,
             blockhash: String,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<bool>>;
+        ) -> RpcResult<RpcResponse<bool>>;
 
-        #[rpc(meta, name = "getFeeForMessage")]
-        fn get_fee_for_message(
+        #[method(name = "getFeeForMessage")]
+        async fn get_fee_for_message(
             &self,
-            meta: Self::Metadata,
             data: String,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<Option<u64>>>;
+        ) -> RpcResult<RpcResponse<Option<u64>>>;
 
-        #[rpc(meta, name = "getStakeMinimumDelegation")]
-        fn get_stake_minimum_delegation(
+        #[method(name = "getStakeMinimumDelegation")]
+        async fn get_stake_minimum_delegation(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<u64>>;
+        ) -> RpcResult<RpcResponse<u64>>;
 
-        #[rpc(meta, name = "getRecentPrioritizationFees")]
-        fn get_recent_prioritization_fees(
+        #[method(name = "getRecentPrioritizationFees")]
+        async fn get_recent_prioritization_fees(
             &self,
-            meta: Self::Metadata,
             pubkey_strs: Option<Vec<String>>,
-        ) -> Result<Vec<RpcPrioritizationFee>>;
+        ) -> RpcResult<Vec<RpcPrioritizationFee>>;
     }
 
-    pub struct FullImpl;
-    impl Full for FullImpl {
-        type Metadata = JsonRpcRequestProcessor;
-
-        fn get_recent_performance_samples(
+    #[async_trait]
+    impl FullApiServer for FullRpcServer {
+        async fn get_recent_performance_samples(
             &self,
             meta: Self::Metadata,
             limit: Option<usize>,
