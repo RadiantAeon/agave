@@ -6,12 +6,8 @@ use {
         max_slots::MaxSlots,
         optimistically_confirmed_bank_tracker::OptimisticallyConfirmedBank,
         rpc::{
-            rpc_accounts::*,
-            rpc_accounts_scan::*,
-            rpc_bank::*,
-            rpc_full::*,
-            rpc_minimal::*,
-            *
+            rpc_accounts, rpc_accounts_scan, rpc_bank, rpc_full, rpc_minimal,
+            JsonRpcConfig, JsonRpcRequestProcessor, RpcBigtableConfig, MAX_REQUEST_BODY_SIZE,
         },
         rpc_cache::LargestAccountsCache,
         rpc_health::*,
@@ -22,7 +18,6 @@ use {
     },
     crossbeam_channel::unbounded,
     futures::prelude::*,
-    hyper::Request,
     jsonrpsee::server::{ServerBuilder, ServerHandle, RpcModule},
     regex::Regex,
     solana_cli_output::display::build_balance_message,
@@ -72,6 +67,7 @@ use {
 };
 
 // Placeholder enum for middleware actions - to be implemented with tower middleware
+#[allow(dead_code)]
 enum RequestMiddlewareAction {
     Proceed,
     Respond {
@@ -92,30 +88,38 @@ impl From<hyper::Request<hyper::Body>> for RequestMiddlewareAction {
     }
 }
 
+#[allow(dead_code)]
 trait RequestMiddleware {
     fn on_request(&self, request: hyper::Request<hyper::Body>) -> RequestMiddlewareAction;
 }
 
+#[allow(dead_code)]
 const FULL_SNAPSHOT_REQUEST_PATH: &str = "/snapshot.tar.bz2";
+#[allow(dead_code)]
 const INCREMENTAL_SNAPSHOT_REQUEST_PATH: &str = "/incremental-snapshot.tar.bz2";
 const LARGEST_ACCOUNTS_CACHE_DURATION: u64 = 60 * 60 * 2;
 /// Default minimum snapshot download speed is 10 MB/s
 /// Full snapshots are ~90 GB, incremental are ~1 GB today but both will increase over time
 /// Full: 120 GB / 10 MB/s = 12,000 seconds -> ~30k slots
+#[allow(dead_code)]
 const FALLBACK_FULL_SNAPSHOT_TIMEOUT_SECS: Duration = Duration::from_secs(12_000);
 /// Incremental: 2.5 GB / 10 MB/s = 250 seconds -> ~625 slots
+#[allow(dead_code)]
 const FALLBACK_INCREMENTAL_SNAPSHOT_TIMEOUT_SECS: Duration = Duration::from_secs(250);
 
+#[allow(dead_code)]
 enum SnapshotKind {
     Full,
     Incremental,
 }
 
+#[allow(dead_code)]
 struct TimeoutStream<S> {
     inner: S,
     deadline: Instant,
 }
 
+#[allow(dead_code)]
 impl<S> TimeoutStream<S> {
     fn new(inner: S, timeout: Duration) -> Self {
         Self {
@@ -153,6 +157,7 @@ pub struct JsonRpcService {
     client_updater: Arc<dyn NotifyKeyUpdate + Send + Sync>,
 }
 
+#[allow(dead_code)]
 struct RpcRequestMiddleware {
     ledger_path: PathBuf,
     full_snapshot_archive_path_regex: Regex,
@@ -162,6 +167,7 @@ struct RpcRequestMiddleware {
     health: Arc<RpcHealth>,
 }
 
+#[allow(dead_code)]
 impl RpcRequestMiddleware {
     pub fn new(
         ledger_path: PathBuf,
@@ -441,6 +447,7 @@ impl RequestMiddleware for RpcRequestMiddleware {
     }
 }
 
+#[allow(dead_code)]
 fn match_supply_path(path: &str) -> Option<&str> {
     match path {
         "/v0/circulating-supply" | "/v0/total-supply" => Some(path),
@@ -448,11 +455,13 @@ fn match_supply_path(path: &str) -> Option<&str> {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum SupplyCalcError {
     Scan(String),
 }
 
+#[allow(dead_code)]
 async fn calculate_circulating_supply_async(bank: &Arc<Bank>) -> Result<u64, SupplyCalcError> {
     let total_supply = bank.capitalization();
     let bank = Arc::clone(bank);
@@ -465,6 +474,7 @@ async fn calculate_circulating_supply_async(bank: &Arc<Bank>) -> Result<u64, Sup
     Ok(total_supply.saturating_sub(non_circulating_supply.lamports))
 }
 
+#[allow(dead_code)]
 async fn handle_rest(bank_forks: &Arc<RwLock<BankForks>>, path: &str) -> Option<String> {
     match path {
         "/v0/circulating-supply" => {
@@ -484,6 +494,7 @@ async fn handle_rest(bank_forks: &Arc<RwLock<BankForks>>, path: &str) -> Option<
     }
 }
 
+#[allow(dead_code)]
 fn process_rest(bank_forks: &Arc<RwLock<BankForks>>, path: &str) -> RequestMiddlewareAction {
     // For REST endpoints, we need to handle them synchronously since middleware doesn't support async
     // Get data from the bank synchronously
@@ -779,7 +790,7 @@ impl JsonRpcService {
                     module.merge(rpc_full::FullApiServer::into_rpc(full_server)).expect("Failed to merge full RPC");
                 }
 
-                let request_middleware = RpcRequestMiddleware::new(
+                let _request_middleware = RpcRequestMiddleware::new(
                     ledger_path,
                     snapshot_config,
                     bank_forks.clone(),

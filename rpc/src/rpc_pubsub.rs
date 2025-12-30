@@ -3,7 +3,7 @@
 use crate::{rpc_pubsub_service, rpc_subscriptions::RpcSubscriptions};
 use {
     crate::{
-        rpc::{check_is_at_least_confirmed, optimize_filters, verify_filters, RpcResult, RpcError},
+        rpc::{check_is_at_least_confirmed, optimize_filters, verify_filters, RpcResult},
         rpc_pubsub_service::PubSubConfig,
         rpc_subscription_tracker::{
             AccountSubscriptionParams, BlockSubscriptionKind, BlockSubscriptionParams,
@@ -14,13 +14,11 @@ use {
     },
     dashmap::DashMap,
     jsonrpsee::{
-        core::{async_trait, SubscriptionResult},
+        core::async_trait,
         proc_macros::rpc,
         types::ErrorObjectOwned,
-        PendingSubscriptionSink,
     },
-    solana_account_decoder::{UiAccount, UiAccountEncoding},
-    solana_clock::Slot,
+    solana_account_decoder::UiAccountEncoding,
     solana_pubkey::Pubkey,
     solana_rpc_client_api::{
         config::{
@@ -28,10 +26,7 @@ use {
             RpcProgramAccountsConfig, RpcSignatureSubscribeConfig, RpcTransactionLogsConfig,
             RpcTransactionLogsFilter,
         },
-        response::{
-            Response as RpcResponse, RpcBlockUpdate, RpcKeyedAccount, RpcLogsResponse,
-            RpcSignatureResult, RpcVersionInfo, RpcVote, SlotInfo, SlotUpdate,
-        },
+        response::RpcVersionInfo,
     },
     solana_signature::Signature,
     solana_transaction_status::UiTransactionEncoding,
