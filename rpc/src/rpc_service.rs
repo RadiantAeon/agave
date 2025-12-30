@@ -5,7 +5,14 @@ use {
         cluster_tpu_info::ClusterTpuInfo,
         max_slots::MaxSlots,
         optimistically_confirmed_bank_tracker::OptimisticallyConfirmedBank,
-        rpc::{rpc_accounts::*, rpc_accounts_scan::*, rpc_bank::*, rpc_full::*, rpc_minimal::*, *},
+        rpc::{
+            rpc_accounts::*,
+            rpc_accounts_scan::*,
+            rpc_bank::*,
+            rpc_full::*,
+            rpc_minimal::*,
+            *
+        },
         rpc_cache::LargestAccountsCache,
         rpc_health::*,
     },
@@ -14,11 +21,9 @@ use {
         snapshot_config::SnapshotConfig, SnapshotInterval,
     },
     crossbeam_channel::unbounded,
-    jsonrpc_core::{futures::prelude::*, MetaIoHandler},
-    jsonrpc_http_server::{
-        hyper, AccessControlAllowOrigin, CloseHandle, DomainsValidation, RequestMiddleware,
-        RequestMiddlewareAction, ServerBuilder,
-    },
+    futures::prelude::*,
+    hyper::Request,
+    jsonrpsee::server::{ServerBuilder, ServerHandle, RpcModule},
     regex::Regex,
     solana_cli_output::display::build_balance_message,
     solana_client::connection_cache::Protocol,
@@ -65,6 +70,31 @@ use {
         sync::CancellationToken,
     },
 };
+
+// Placeholder enum for middleware actions - to be implemented with tower middleware
+enum RequestMiddlewareAction {
+    Proceed,
+    Respond {
+        response: hyper::Response<hyper::Body>,
+        should_validate_hosts: bool,
+    },
+}
+
+impl From<hyper::Response<hyper::Body>> for RequestMiddlewareAction {
+    fn from(response: hyper::Response<hyper::Body>) -> Self {
+        RequestMiddlewareAction::Respond { response, should_validate_hosts: true }
+    }
+}
+
+impl From<hyper::Request<hyper::Body>> for RequestMiddlewareAction {
+    fn from(_request: hyper::Request<hyper::Body>) -> Self {
+        RequestMiddlewareAction::Proceed
+    }
+}
+
+trait RequestMiddleware {
+    fn on_request(&self, request: hyper::Request<hyper::Body>) -> RequestMiddlewareAction;
+}
 
 const FULL_SNAPSHOT_REQUEST_PATH: &str = "/snapshot.tar.bz2";
 const INCREMENTAL_SNAPSHOT_REQUEST_PATH: &str = "/incremental-snapshot.tar.bz2";
@@ -118,7 +148,7 @@ pub struct JsonRpcService {
     #[cfg(test)]
     pub request_processor: JsonRpcRequestProcessor, // Used only by test_rpc_new()...
 
-    close_handle: Option<CloseHandle>,
+    close_handle: Option<ServerHandle>,
 
     client_updater: Arc<dyn NotifyKeyUpdate + Send + Sync>,
 }
@@ -303,28 +333,36 @@ impl RpcRequestMiddleware {
 
         RequestMiddlewareAction::Respond {
             should_validate_hosts: true,
-            response: Box::pin(async move {
-                match Self::open_no_follow(filename).await {
-                    Err(err) => Ok(if err.kind() == std::io::ErrorKind::NotFound {
+            response: {
+                // Use synchronous file opening for the middleware response
+                let file_result = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(false)
+                    .create(false)
+                    .open(&filename);
+                
+                match file_result {
+                    Err(err) => if err.kind() == std::io::ErrorKind::NotFound {
                         Self::not_found()
                     } else {
                         Self::internal_server_error()
-                    }),
+                    },
                     Ok(file) => {
+                        let tokio_file = tokio::fs::File::from_std(file);
                         let stream =
-                            FramedRead::new(file, BytesCodec::new()).map_ok(|b| b.freeze());
+                            FramedRead::new(tokio_file, BytesCodec::new()).map_ok(|b| b.freeze());
                         let body = if let Some(timeout) = snapshot_timeout {
                             hyper::Body::wrap_stream(TimeoutStream::new(stream, timeout))
                         } else {
                             hyper::Body::wrap_stream(stream)
                         };
-                        Ok(hyper::Response::builder()
+                        hyper::Response::builder()
                             .header(hyper::header::CONTENT_LENGTH, file_length)
                             .body(body)
-                            .unwrap())
+                            .unwrap()
                     }
                 }
-            }),
+            },
         }
     }
 
@@ -447,21 +485,44 @@ async fn handle_rest(bank_forks: &Arc<RwLock<BankForks>>, path: &str) -> Option<
 }
 
 fn process_rest(bank_forks: &Arc<RwLock<BankForks>>, path: &str) -> RequestMiddlewareAction {
-    let bank_forks = bank_forks.clone();
-    let path = path.to_string();
-
-    RequestMiddlewareAction::Respond {
-        should_validate_hosts: true,
-        response: Box::pin(async move {
-            let result = handle_rest(&bank_forks, path.as_str()).await;
-            match result {
-                Some(s) => Ok(hyper::Response::builder()
+    // For REST endpoints, we need to handle them synchronously since middleware doesn't support async
+    // Get data from the bank synchronously
+    match path {
+        "/v0/circulating-supply" => {
+            let bank = bank_forks.read().unwrap().root_bank();
+            // Use synchronous approach for circulating supply
+            let non_circulating = solana_runtime::non_circulating_supply::calculate_non_circulating_supply(&bank);
+            let total_supply = bank.capitalization();
+            let supply = match non_circulating {
+                Ok(non_circ) => total_supply.saturating_sub(non_circ.lamports),
+                Err(_) => return RequestMiddlewareAction::Respond {
+                    should_validate_hosts: true,
+                    response: RpcRequestMiddleware::not_found(),
+                },
+            };
+            RequestMiddlewareAction::Respond {
+                should_validate_hosts: true,
+                response: hyper::Response::builder()
                     .status(hyper::StatusCode::OK)
-                    .body(hyper::Body::from(s))
-                    .unwrap()),
-                None => Ok(RpcRequestMiddleware::not_found()),
+                    .body(hyper::Body::from(build_balance_message(supply, false, false)))
+                    .unwrap(),
             }
-        }),
+        }
+        "/v0/total-supply" => {
+            let bank = bank_forks.read().unwrap().root_bank();
+            let total_supply = bank.capitalization();
+            RequestMiddlewareAction::Respond {
+                should_validate_hosts: true,
+                response: hyper::Response::builder()
+                    .status(hyper::StatusCode::OK)
+                    .body(hyper::Body::from(build_balance_message(total_supply, false, false)))
+                    .unwrap(),
+            }
+        }
+        _ => RequestMiddlewareAction::Respond {
+            should_validate_hosts: true,
+            response: RpcRequestMiddleware::not_found(),
+        },
     }
 }
 
@@ -697,14 +758,25 @@ impl JsonRpcService {
             .spawn(move || {
                 renice_this_thread(rpc_niceness_adj).unwrap();
 
-                let mut io = MetaIoHandler::default();
-
-                io.extend_with(rpc_minimal::MinimalImpl.to_delegate());
+                // Create RPC module with jsonrpsee
+                let mut module = RpcModule::new(());
+                
+                // Add RPC methods
+                let minimal_server = rpc_minimal::MinimalRpcServer::new(request_processor.clone());
+                module.merge(rpc_minimal::MinimalApiServer::into_rpc(minimal_server)).expect("Failed to merge minimal RPC");
+                
                 if full_api {
-                    io.extend_with(rpc_bank::BankDataImpl.to_delegate());
-                    io.extend_with(rpc_accounts::AccountsDataImpl.to_delegate());
-                    io.extend_with(rpc_accounts_scan::AccountsScanImpl.to_delegate());
-                    io.extend_with(rpc_full::FullImpl.to_delegate());
+                    let bank_server = rpc_bank::BankDataRpcServer::new(request_processor.clone());
+                    module.merge(rpc_bank::BankDataApiServer::into_rpc(bank_server)).expect("Failed to merge bank RPC");
+                    
+                    let accounts_server = rpc_accounts::AccountsDataRpcServer::new(request_processor.clone());
+                    module.merge(rpc_accounts::AccountsDataApiServer::into_rpc(accounts_server)).expect("Failed to merge accounts RPC");
+                    
+                    let accounts_scan_server = rpc_accounts_scan::AccountsScanRpcServer::new(request_processor.clone());
+                    module.merge(rpc_accounts_scan::AccountsScanApiServer::into_rpc(accounts_scan_server)).expect("Failed to merge accounts scan RPC");
+                    
+                    let full_server = rpc_full::FullRpcServer::new(request_processor.clone());
+                    module.merge(rpc_full::FullApiServer::into_rpc(full_server)).expect("Failed to merge full RPC");
                 }
 
                 let request_middleware = RpcRequestMiddleware::new(
@@ -713,40 +785,36 @@ impl JsonRpcService {
                     bank_forks.clone(),
                     health.clone(),
                 );
-                let server = ServerBuilder::with_meta_extractor(
-                    io,
-                    move |req: &hyper::Request<hyper::Body>| {
-                        let xbigtable = req.headers().get("x-bigtable");
-                        if xbigtable.is_some_and(|v| v == "disabled") {
-                            request_processor.clone_without_bigtable()
-                        } else {
-                            request_processor.clone()
-                        }
-                    },
-                )
-                .event_loop_executor(runtime.handle().clone())
-                .threads(1)
-                .cors(DomainsValidation::AllowOnly(vec![
-                    AccessControlAllowOrigin::Any,
-                ]))
-                .cors_max_age(86400)
-                .request_middleware(request_middleware)
-                .max_request_body_size(max_request_body_size)
-                .start_http(&rpc_addr);
+                
+                // Build and start jsonrpsee server
+                let server_result = runtime.block_on(async {
+                    let config = jsonrpsee::server::ServerConfig::builder()
+                        .max_request_body_size(max_request_body_size as u32)
+                        .build();
+                    ServerBuilder::new()
+                        .set_config(config)
+                        .build(rpc_addr)
+                        .await
+                });
+                
+                let server = match server_result {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!(
+                            "JSON RPC service unavailable error: {e:?}. Also, check that port {} is \
+                             not already in use by another application",
+                            rpc_addr.port()
+                        );
+                        close_handle_sender.send(Err(e.to_string())).unwrap();
+                        return;
+                    }
+                };
 
-                if let Err(e) = server {
-                    warn!(
-                        "JSON RPC service unavailable error: {e:?}. Also, check that port {} is \
-                         not already in use by another application",
-                        rpc_addr.port()
-                    );
-                    close_handle_sender.send(Err(e.to_string())).unwrap();
-                    return;
-                }
-
-                let server = server.unwrap();
-                close_handle_sender.send(Ok(server.close_handle())).unwrap();
-                server.wait();
+                let handle = server.start(module);
+                close_handle_sender.send(Ok(handle.clone())).unwrap();
+                
+                // Wait for server to stop
+                runtime.block_on(handle.stopped());
                 exit_bigtable_ledger_upload_service.store(true, Ordering::Relaxed);
             })
             .unwrap();
@@ -757,7 +825,7 @@ impl JsonRpcService {
             .write()
             .unwrap()
             .register_exit(Box::new(move || {
-                close_handle_.close();
+                close_handle_.stop().ok();
             }));
         Ok(Self {
             thread_hdl,
@@ -770,7 +838,7 @@ impl JsonRpcService {
 
     pub fn exit(&mut self) {
         if let Some(c) = self.close_handle.take() {
-            c.close()
+            c.stop().ok();
         }
     }
 

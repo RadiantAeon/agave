@@ -25,7 +25,7 @@ use {
     solana_gossip::contact_info::{ContactInfo, Protocol, SOCKET_ADDR_UNSPECIFIED},
     solana_keypair::{read_keypair_file, Keypair},
     solana_pubkey::Pubkey,
-    solana_rpc::rpc::verify_pubkey,
+    solana_rpc::rpc::verify_pubkey_legacy as verify_pubkey,
     solana_rpc_client_api::{config::RpcAccountIndex, custom_error::RpcCustomError},
     solana_signer::Signer,
     solana_validator_exit::Exit,

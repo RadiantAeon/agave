@@ -11,12 +11,12 @@ use {
     base64::{prelude::BASE64_STANDARD, Engine},
     bincode::{config::Options, serialize},
     crossbeam_channel::{unbounded, Receiver, Sender},
-    jsonrpc_core::{
-        futures::future::{self, FutureExt, OptionFuture},
-        types::error,
-        BoxFuture, Error, Metadata, Result,
+    futures::future::{self, FutureExt, OptionFuture},
+    jsonrpsee::{
+        core::async_trait,
+        proc_macros::rpc,
+        types::{error::ErrorCode, ErrorObject, ErrorObjectOwned},
     },
-    jsonrpc_derive::rpc,
     solana_account::{AccountSharedData, ReadableAccount},
     solana_account_decoder::{
         encode_ui_account,
@@ -138,6 +138,12 @@ pub mod account_resolver;
 
 type RpcCustomResult<T> = std::result::Result<T, RpcCustomError>;
 
+/// Result type for RPC methods
+pub use jsonrpsee::core::RpcResult;
+
+/// Error type for RPC methods  
+pub type RpcError = ErrorObjectOwned;
+
 pub const MAX_REQUEST_BODY_SIZE: usize = 50 * (1 << 10); // 50kB
 pub const PERFORMANCE_SAMPLES_LIMIT: usize = 720;
 
@@ -255,7 +261,6 @@ pub struct JsonRpcRequestProcessor {
     prioritization_fee_cache: Option<Arc<PrioritizationFeeCache>>,
     runtime: Arc<Runtime>,
 }
-impl Metadata for JsonRpcRequestProcessor {}
 
 impl JsonRpcRequestProcessor {
     pub fn clone_without_bigtable(&self) -> JsonRpcRequestProcessor {
@@ -267,7 +272,7 @@ impl JsonRpcRequestProcessor {
 }
 
 impl JsonRpcRequestProcessor {
-    fn get_bank_with_config(&self, config: RpcContextConfig) -> Result<Arc<Bank>> {
+    fn get_bank_with_config(&self, config: RpcContextConfig) -> RpcResult<Arc<Bank>> {
         let RpcContextConfig {
             commitment,
             min_context_slot,
@@ -284,7 +289,7 @@ impl JsonRpcRequestProcessor {
         Ok(bank)
     }
 
-    fn check_if_transaction_history_enabled(&self) -> Result<()> {
+    fn check_if_transaction_history_enabled(&self) -> RpcResult<()> {
         if !self.config.enable_rpc_transaction_history {
             return Err(RpcCustomError::TransactionHistoryNotAvailable.into());
         }
@@ -529,7 +534,7 @@ impl JsonRpcRequestProcessor {
         &self,
         pubkey: Pubkey,
         config: Option<RpcAccountInfoConfig>,
-    ) -> Result<RpcResponse<Option<UiAccount>>> {
+    ) -> RpcResult<RpcResponse<Option<UiAccount>>> {
         let RpcAccountInfoConfig {
             encoding,
             data_slice,
@@ -557,7 +562,7 @@ impl JsonRpcRequestProcessor {
         &self,
         pubkeys: Vec<Pubkey>,
         config: Option<RpcAccountInfoConfig>,
-    ) -> Result<RpcResponse<Vec<Option<UiAccount>>>> {
+    ) -> RpcResult<RpcResponse<Vec<Option<UiAccount>>>> {
         let RpcAccountInfoConfig {
             encoding,
             data_slice,
@@ -601,7 +606,7 @@ impl JsonRpcRequestProcessor {
         mut filters: Vec<RpcFilterType>,
         with_context: bool,
         sort_results: bool,
-    ) -> Result<OptionalContext<Vec<RpcKeyedAccount>>> {
+    ) -> RpcResult<OptionalContext<Vec<RpcKeyedAccount>>> {
         let RpcAccountInfoConfig {
             encoding,
             data_slice: data_slice_config,
@@ -695,7 +700,7 @@ impl JsonRpcRequestProcessor {
         &self,
         addresses: Vec<Pubkey>,
         config: Option<RpcEpochConfig>,
-    ) -> Result<Vec<Option<RpcInflationReward>>> {
+    ) -> RpcResult<Vec<Option<RpcInflationReward>>> {
         let config = config.unwrap_or_default();
         let epoch_schedule = self.get_epoch_schedule();
         let first_available_block = self.get_first_available_block().await;
@@ -917,7 +922,7 @@ impl JsonRpcRequestProcessor {
         &self,
         pubkey: &Pubkey,
         config: RpcContextConfig,
-    ) -> Result<RpcResponse<u64>> {
+    ) -> RpcResult<RpcResponse<u64>> {
         let bank = self.get_bank_with_config(config)?;
         Ok(new_response(&bank, bank.get_balance(pubkey)))
     }
@@ -926,7 +931,7 @@ impl JsonRpcRequestProcessor {
         &self,
         signature: &Signature,
         commitment: Option<CommitmentConfig>,
-    ) -> Result<RpcResponse<bool>> {
+    ) -> RpcResult<RpcResponse<bool>> {
         let bank = self.bank(commitment);
         let status = bank.get_signature_status(signature);
         match status {
@@ -945,12 +950,12 @@ impl JsonRpcRequestProcessor {
         }
     }
 
-    fn get_slot(&self, config: RpcContextConfig) -> Result<Slot> {
+    fn get_slot(&self, config: RpcContextConfig) -> RpcResult<Slot> {
         let bank = self.get_bank_with_config(config)?;
         Ok(bank.slot())
     }
 
-    fn get_block_height(&self, config: RpcContextConfig) -> Result<u64> {
+    fn get_block_height(&self, config: RpcContextConfig) -> RpcResult<u64> {
         let bank = self.get_bank_with_config(config)?;
         Ok(bank.block_height())
     }
@@ -963,7 +968,7 @@ impl JsonRpcRequestProcessor {
         self.max_slots.shred_insert.load(Ordering::Relaxed)
     }
 
-    fn get_slot_leader(&self, config: RpcContextConfig) -> Result<String> {
+    fn get_slot_leader(&self, config: RpcContextConfig) -> RpcResult<String> {
         let bank = self.get_bank_with_config(config)?;
         Ok(bank.leader_id().to_string())
     }
@@ -973,7 +978,7 @@ impl JsonRpcRequestProcessor {
         commitment: Option<CommitmentConfig>,
         start_slot: Slot,
         limit: usize,
-    ) -> Result<Vec<Pubkey>> {
+    ) -> RpcResult<Vec<Pubkey>> {
         let bank = self.bank(commitment);
 
         let (mut epoch, mut slot_index) =
@@ -992,9 +997,7 @@ impl JsonRpcRequestProcessor {
                         .take(limit.saturating_sub(slot_leaders.len())),
                 );
             } else {
-                return Err(Error::invalid_params(format!(
-                    "Invalid slot range: leader schedule for epoch {epoch} is unavailable"
-                )));
+                return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Invalid slot range: leader schedule for epoch {epoch} is unavailable"), None::<()>));
             }
 
             epoch += 1;
@@ -1004,20 +1007,20 @@ impl JsonRpcRequestProcessor {
         Ok(slot_leaders)
     }
 
-    fn minimum_ledger_slot(&self) -> Result<Slot> {
+    fn minimum_ledger_slot(&self) -> RpcResult<Slot> {
         match self.blockstore.slot_meta_iterator(0) {
             Ok(mut metas) => match metas.next() {
                 Some((slot, _meta)) => Ok(slot),
-                None => Err(Error::invalid_request()),
+                None => Err(ErrorObject::owned(ErrorCode::InvalidRequest.code(), "Invalid request".to_string(), None::<()>)),
             },
             Err(err) => {
                 warn!("slot_meta_iterator failed: {err:?}");
-                Err(Error::invalid_request())
+                Err(ErrorObject::owned(ErrorCode::InvalidRequest.code(), "Invalid request".to_string(), None::<()>))
             }
         }
     }
 
-    fn get_transaction_count(&self, config: RpcContextConfig) -> Result<u64> {
+    fn get_transaction_count(&self, config: RpcContextConfig) -> RpcResult<u64> {
         let bank = self.get_bank_with_config(config)?;
         Ok(bank.transaction_count())
     }
@@ -1137,7 +1140,7 @@ impl JsonRpcRequestProcessor {
     fn get_vote_accounts(
         &self,
         config: Option<RpcGetVoteAccountsConfig>,
-    ) -> Result<RpcVoteAccountStatus> {
+    ) -> RpcResult<RpcVoteAccountStatus> {
         let config = config.unwrap_or_default();
 
         let filter_by_vote_pubkey = if let Some(ref vote_pubkey) = config.vote_pubkey {
@@ -1150,7 +1153,7 @@ impl JsonRpcRequestProcessor {
         let vote_accounts = bank.vote_accounts();
         let epoch_vote_accounts = bank
             .epoch_vote_accounts(bank.get_epoch_and_slot_index(bank.slot()).0)
-            .ok_or_else(Error::invalid_request)?;
+            .ok_or_else(|| ErrorObject::owned(ErrorCode::InvalidRequest.code(), "Invalid request".to_string(), None::<()>))?;
         let delinquent_validator_slot_distance = config
             .delinquent_slot_distance
             .unwrap_or(DELINQUENT_VALIDATOR_SLOT_DISTANCE);
@@ -1217,7 +1220,7 @@ impl JsonRpcRequestProcessor {
         &self,
         result: &std::result::Result<T, BlockstoreError>,
         slot: Slot,
-    ) -> Result<()> {
+    ) -> RpcResult<()> {
         if let Err(err) = result {
             debug!(
                 "check_blockstore_root, slot: {:?}, max root: {:?}, err: {:?}",
@@ -1239,12 +1242,12 @@ impl JsonRpcRequestProcessor {
         &self,
         result: &std::result::Result<T, BlockstoreError>,
         slot: Slot,
-    ) -> Result<()> {
+    ) -> RpcResult<()> {
         let first_available_block = self
             .blockstore
             .get_first_available_block()
             .unwrap_or_default();
-        let err: Error = RpcCustomError::BlockCleanedUp {
+        let err: ErrorObjectOwned = RpcCustomError::BlockCleanedUp {
             slot,
             first_available_block,
         }
@@ -1261,14 +1264,14 @@ impl JsonRpcRequestProcessor {
     fn check_bigtable_result<T>(
         &self,
         result: &std::result::Result<T, solana_storage_bigtable::Error>,
-    ) -> Result<()> {
+    ) -> RpcResult<()> {
         if let Err(solana_storage_bigtable::Error::BlockNotFound(slot)) = result {
             return Err(RpcCustomError::LongTermStorageSlotSkipped { slot: *slot }.into());
         }
         Ok(())
     }
 
-    fn check_blockstore_writes_complete(&self, slot: Slot) -> Result<()> {
+    fn check_blockstore_writes_complete(&self, slot: Slot) -> RpcResult<()> {
         if slot
             > self
                 .max_complete_transaction_status_slot
@@ -1284,7 +1287,7 @@ impl JsonRpcRequestProcessor {
         &self,
         slot: Slot,
         config: Option<RpcEncodingConfigWrapper<RpcBlockConfig>>,
-    ) -> Result<Option<UiConfirmedBlock>> {
+    ) -> RpcResult<Option<UiConfirmedBlock>> {
         self.check_if_transaction_history_enabled()?;
 
         let config = config
@@ -1331,7 +1334,7 @@ impl JsonRpcRequestProcessor {
                     encoded_block.block_time = Some(self.genesis_creation_time());
                     encoded_block.block_height = Some(0);
                 }
-                Ok::<UiConfirmedBlock, Error>(encoded_block)
+                Ok::<UiConfirmedBlock, ErrorObjectOwned>(encoded_block)
             };
             if result.is_err() {
                 if let Some(bigtable_ledger_storage) = &self.bigtable_ledger_storage {
@@ -1404,7 +1407,7 @@ impl JsonRpcRequestProcessor {
         start_slot: Slot,
         end_slot: Option<Slot>,
         config: Option<RpcContextConfig>,
-    ) -> Result<Vec<Slot>> {
+    ) -> RpcResult<Vec<Slot>> {
         let config = config.unwrap_or_default();
         let commitment = config.commitment.unwrap_or_default();
         check_is_at_least_confirmed(commitment)?;
@@ -1435,9 +1438,7 @@ impl JsonRpcRequestProcessor {
             return Ok(vec![]);
         }
         if end_slot - start_slot > MAX_GET_CONFIRMED_BLOCKS_RANGE {
-            return Err(Error::invalid_params(format!(
-                "Slot range too large; max {MAX_GET_CONFIRMED_BLOCKS_RANGE}"
-            )));
+            return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Slot range too large; max {MAX_GET_CONFIRMED_BLOCKS_RANGE}"), None::<()>));
         }
 
         let lowest_blockstore_slot = self
@@ -1457,9 +1458,9 @@ impl JsonRpcRequestProcessor {
                         bigtable_blocks
                     })
                     .map_err(|_| {
-                        Error::invalid_params(
-                            "BigTable query failed (maybe timeout due to too large range?)"
-                                .to_string(),
+                        ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+                            "BigTable query failed (maybe timeout due to large range?)".to_string(),
+                            None::<()>
                         )
                     });
             }
@@ -1469,7 +1470,7 @@ impl JsonRpcRequestProcessor {
         let mut blocks: Vec<_> = self
             .blockstore
             .rooted_slot_iterator(max(start_slot, lowest_blockstore_slot))
-            .map_err(|_| Error::internal_error())?
+            .map_err(|_| ErrorObject::owned(ErrorCode::InternalError.code(), "Internal error".to_string(), None::<()>))?
             .filter(|&slot| slot <= end_slot && slot <= highest_super_majority_root)
             .collect();
         let last_element = blocks
@@ -1498,15 +1499,13 @@ impl JsonRpcRequestProcessor {
         start_slot: Slot,
         limit: usize,
         config: Option<RpcContextConfig>,
-    ) -> Result<Vec<Slot>> {
+    ) -> RpcResult<Vec<Slot>> {
         let config = config.unwrap_or_default();
         let commitment = config.commitment.unwrap_or_default();
         check_is_at_least_confirmed(commitment)?;
 
         if limit > MAX_GET_CONFIRMED_BLOCKS_RANGE as usize {
-            return Err(Error::invalid_params(format!(
-                "Limit too large; max {MAX_GET_CONFIRMED_BLOCKS_RANGE}"
-            )));
+            return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Limit too large; max {MAX_GET_CONFIRMED_BLOCKS_RANGE}"), None::<()>));
         }
 
         let lowest_blockstore_slot = self
@@ -1546,7 +1545,7 @@ impl JsonRpcRequestProcessor {
         let mut blocks: Vec<_> = self
             .blockstore
             .rooted_slot_iterator(max(start_slot, lowest_blockstore_slot))
-            .map_err(|_| Error::internal_error())?
+            .map_err(|_| ErrorObject::owned(ErrorCode::InternalError.code(), "Internal error".to_string(), None::<()>))?
             .take(limit)
             .filter(|&slot| slot <= highest_super_majority_root)
             .collect();
@@ -1572,7 +1571,7 @@ impl JsonRpcRequestProcessor {
         Ok(blocks)
     }
 
-    pub async fn get_block_time(&self, slot: Slot) -> Result<Option<UnixTimestamp>> {
+    pub async fn get_block_time(&self, slot: Slot) -> RpcResult<Option<UnixTimestamp>> {
         if slot == 0 {
             return Ok(Some(self.genesis_creation_time()));
         }
@@ -1610,7 +1609,7 @@ impl JsonRpcRequestProcessor {
         &self,
         signature: Signature,
         commitment: Option<CommitmentConfig>,
-    ) -> Result<Option<RpcSignatureConfirmation>> {
+    ) -> RpcResult<Option<RpcSignatureConfirmation>> {
         let bank = self.bank(commitment);
         Ok(self
             .get_transaction_status(signature, &bank)
@@ -1629,7 +1628,7 @@ impl JsonRpcRequestProcessor {
         &self,
         signature: Signature,
         commitment: Option<CommitmentConfig>,
-    ) -> Result<Option<transaction::Result<()>>> {
+    ) -> RpcResult<Option<transaction::Result<()>>> {
         let bank = self.bank(commitment);
         Ok(bank
             .get_signature_status_slot(&signature)
@@ -1640,7 +1639,7 @@ impl JsonRpcRequestProcessor {
         &self,
         signatures: Vec<Signature>,
         config: Option<RpcSignatureStatusConfig>,
-    ) -> Result<RpcResponse<Vec<Option<TransactionStatus>>>> {
+    ) -> RpcResult<RpcResponse<Vec<Option<TransactionStatus>>>> {
         let search_transaction_history = config
             .map(|x| x.search_transaction_history)
             .unwrap_or(false);
@@ -1658,7 +1657,7 @@ impl JsonRpcRequestProcessor {
                 if let Some(status) = self
                     .blockstore
                     .get_rooted_transaction_status(signature)
-                    .map_err(|_| Error::internal_error())?
+                    .map_err(|_| ErrorObject::owned(ErrorCode::InternalError.code(), "Internal error".to_string(), None::<()>))?
                     .filter(|(slot, _status_meta)| {
                         slot <= &self
                             .block_commitment_cache
@@ -1736,7 +1735,7 @@ impl JsonRpcRequestProcessor {
         &self,
         signature: Signature,
         config: Option<RpcEncodingConfigWrapper<RpcTransactionConfig>>,
-    ) -> Result<Option<EncodedConfirmedTransactionWithStatusMeta>> {
+    ) -> RpcResult<Option<EncodedConfirmedTransactionWithStatusMeta>> {
         self.check_if_transaction_history_enabled()?;
 
         let config = config
@@ -1766,7 +1765,7 @@ impl JsonRpcRequestProcessor {
             .expect("Failed to spawn blocking task");
 
         let encode_transaction =
-                |confirmed_tx_with_meta: ConfirmedTransactionWithStatusMeta| -> Result<EncodedConfirmedTransactionWithStatusMeta> {
+                |confirmed_tx_with_meta: ConfirmedTransactionWithStatusMeta| -> RpcResult<EncodedConfirmedTransactionWithStatusMeta> {
                     Ok(confirmed_tx_with_meta.encode(encoding, max_supported_transaction_version).map_err(RpcCustomError::from)?)
                 };
 
@@ -1818,7 +1817,7 @@ impl JsonRpcRequestProcessor {
         until: Option<Signature>,
         mut limit: usize,
         config: RpcContextConfig,
-    ) -> Result<Vec<RpcConfirmedTransactionStatusWithSignature>> {
+    ) -> RpcResult<Vec<RpcConfirmedTransactionStatusWithSignature>> {
         self.check_if_transaction_history_enabled()?;
 
         let commitment = config.commitment.unwrap_or_default();
@@ -1849,7 +1848,7 @@ impl JsonRpcRequestProcessor {
         } = self
             .blockstore
             .get_confirmed_signatures_for_address2(address, highest_slot, before, until, limit)
-            .map_err(|err| Error::invalid_params(format!("{err}")))?;
+            .map_err(|err| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("{err}"), None::<()>))?;
 
         let map_results = |results: Vec<ConfirmedTransactionStatusWithSignature>| {
             results
@@ -1958,19 +1957,19 @@ impl JsonRpcRequestProcessor {
         &self,
         pubkey: &Pubkey,
         commitment: Option<CommitmentConfig>,
-    ) -> Result<RpcResponse<UiTokenAmount>> {
+    ) -> RpcResult<RpcResponse<UiTokenAmount>> {
         let bank = self.bank(commitment);
         let account = bank.get_account(pubkey).ok_or_else(|| {
-            Error::invalid_params("Invalid param: could not find account".to_string())
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), "Invalid param: could not find account".to_string(), None::<()>)
         })?;
 
         if !is_known_spl_token_id(account.owner()) {
-            return Err(Error::invalid_params(
-                "Invalid param: not a Token account".to_string(),
+            return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+                "Invalid param: not a Token account".to_string(), None::<()>,
             ));
         }
         let token_account = StateWithExtensions::<TokenAccount>::unpack(account.data())
-            .map_err(|_| Error::invalid_params("Invalid param: not a Token account".to_string()))?;
+            .map_err(|_| ErrorObject::owned(ErrorCode::InvalidParams.code(), "Invalid param: not a Token account".to_string(), None::<()>))?;
         let mint = &Pubkey::from_str(&token_account.base.mint.to_string())
             .expect("Token account mint should be convertible to Pubkey");
         let (_, data) = get_mint_owner_and_additional_data(&bank, mint)?;
@@ -1982,18 +1981,18 @@ impl JsonRpcRequestProcessor {
         &self,
         mint: &Pubkey,
         commitment: Option<CommitmentConfig>,
-    ) -> Result<RpcResponse<UiTokenAmount>> {
+    ) -> RpcResult<RpcResponse<UiTokenAmount>> {
         let bank = self.bank(commitment);
         let mint_account = bank.get_account(mint).ok_or_else(|| {
-            Error::invalid_params("Invalid param: could not find account".to_string())
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), "Invalid param: could not find account".to_string(), None::<()>)
         })?;
         if !is_known_spl_token_id(mint_account.owner()) {
-            return Err(Error::invalid_params(
-                "Invalid param: not a Token mint".to_string(),
+            return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+                "Invalid param: not a Token mint".to_string(), None::<()>,
             ));
         }
         let mint = StateWithExtensions::<Mint>::unpack(mint_account.data()).map_err(|_| {
-            Error::invalid_params("Invalid param: mint could not be unpacked".to_string())
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), "Invalid param: mint could not be unpacked".to_string(), None::<()>)
         })?;
 
         let interest_bearing_config = mint
@@ -2021,12 +2020,12 @@ impl JsonRpcRequestProcessor {
         &self,
         mint: Pubkey,
         commitment: Option<CommitmentConfig>,
-    ) -> Result<RpcResponse<Vec<RpcTokenAccountBalance>>> {
+    ) -> RpcResult<RpcResponse<Vec<RpcTokenAccountBalance>>> {
         let bank = self.bank(commitment);
         let (mint_owner, data) = get_mint_owner_and_additional_data(&bank, &mint)?;
         if !is_known_spl_token_id(&mint_owner) {
-            return Err(Error::invalid_params(
-                "Invalid param: not a Token mint".to_string(),
+            return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+                "Invalid param: not a Token mint".to_string(), None::<()>,
             ));
         }
 
@@ -2079,7 +2078,7 @@ impl JsonRpcRequestProcessor {
         token_account_filter: TokenAccountsFilter,
         config: Option<RpcAccountInfoConfig>,
         sort_results: bool,
-    ) -> Result<RpcResponse<Vec<RpcKeyedAccount>>> {
+    ) -> RpcResult<RpcResponse<Vec<RpcKeyedAccount>>> {
         let RpcAccountInfoConfig {
             encoding,
             data_slice: data_slice_config,
@@ -2133,7 +2132,7 @@ impl JsonRpcRequestProcessor {
         token_account_filter: TokenAccountsFilter,
         config: Option<RpcAccountInfoConfig>,
         sort_results: bool,
-    ) -> Result<RpcResponse<Vec<RpcKeyedAccount>>> {
+    ) -> RpcResult<RpcResponse<Vec<RpcKeyedAccount>>> {
         let RpcAccountInfoConfig {
             encoding,
             data_slice: data_slice_config,
@@ -2347,7 +2346,7 @@ impl JsonRpcRequestProcessor {
         }
     }
 
-    fn get_latest_blockhash(&self, config: RpcContextConfig) -> Result<RpcResponse<RpcBlockhash>> {
+    fn get_latest_blockhash(&self, config: RpcContextConfig) -> RpcResult<RpcResponse<RpcBlockhash>> {
         let bank = self.get_bank_with_config(config)?;
         let blockhash = bank.last_blockhash();
         let last_valid_block_height = bank
@@ -2366,13 +2365,13 @@ impl JsonRpcRequestProcessor {
         &self,
         blockhash: &Hash,
         config: RpcContextConfig,
-    ) -> Result<RpcResponse<bool>> {
+    ) -> RpcResult<RpcResponse<bool>> {
         let bank = self.get_bank_with_config(config)?;
         let is_valid = bank.is_blockhash_valid(blockhash);
         Ok(new_response(&bank, is_valid))
     }
 
-    fn get_stake_minimum_delegation(&self, config: RpcContextConfig) -> Result<RpcResponse<u64>> {
+    fn get_stake_minimum_delegation(&self, config: RpcContextConfig) -> RpcResult<RpcResponse<u64>> {
         let bank = self.get_bank_with_config(config)?;
         let stake_minimum_delegation = stake_utils::get_minimum_delegation(
             bank.feature_set
@@ -2384,10 +2383,10 @@ impl JsonRpcRequestProcessor {
     fn get_recent_prioritization_fees(
         &self,
         pubkeys: Vec<Pubkey>,
-    ) -> Result<Vec<RpcPrioritizationFee>> {
+    ) -> RpcResult<Vec<RpcPrioritizationFee>> {
         let Some(prioritization_fee_cache) = self.prioritization_fee_cache.as_deref() else {
             error!("The PrioritizationFeeCache should always be available for the full RPC API");
-            return Err(Error::internal_error());
+            return Err(ErrorObject::owned(ErrorCode::InternalError.code(), "Internal error".to_string(), None::<()>));
         };
 
         Ok(prioritization_fee_cache
@@ -2412,11 +2411,9 @@ pub(crate) fn optimize_filters(filters: &mut [RpcFilterType]) {
     })
 }
 
-pub(crate) fn verify_filters(filters: &[RpcFilterType]) -> Result<()> {
+pub(crate) fn verify_filters(filters: &[RpcFilterType]) -> RpcResult<()> {
     if filters.len() > MAX_GET_PROGRAM_ACCOUNT_FILTERS {
-        return Err(Error::invalid_params(format!(
-            "Too many filters provided; max {MAX_GET_PROGRAM_ACCOUNT_FILTERS}"
-        )));
+        return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Too many filters provided; max {MAX_GET_PROGRAM_ACCOUNT_FILTERS}"), None::<()>));
     }
     for filter in filters {
         verify_filter(filter)?;
@@ -2424,33 +2421,44 @@ pub(crate) fn verify_filters(filters: &[RpcFilterType]) -> Result<()> {
     Ok(())
 }
 
-fn verify_filter(input: &RpcFilterType) -> Result<()> {
+fn verify_filter(input: &RpcFilterType) -> RpcResult<()> {
     input
         .verify()
-        .map_err(|e| Error::invalid_params(format!("Invalid param: {e:?}")))
+        .map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Invalid param: {e:?}"), None::<()>))
 }
 
-pub fn verify_pubkey(input: &str) -> Result<Pubkey> {
+pub fn verify_pubkey(input: &str) -> RpcResult<Pubkey> {
     input
         .parse()
-        .map_err(|e| Error::invalid_params(format!("Invalid param: {e:?}")))
+        .map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Invalid param: {e:?}"), None::<()>))
 }
 
-fn verify_hash(input: &str) -> Result<Hash> {
+/// Legacy verify_pubkey for IPC admin RPC (uses jsonrpc_core error types)
+pub fn verify_pubkey_legacy(input: &str) -> jsonrpc_core::Result<Pubkey> {
     input
         .parse()
-        .map_err(|e| Error::invalid_params(format!("Invalid param: {e:?}")))
+        .map_err(|e| jsonrpc_core::Error {
+            code: jsonrpc_core::ErrorCode::InvalidParams,
+            message: format!("Invalid param: {e:?}"),
+            data: None,
+        })
 }
 
-fn verify_signature(input: &str) -> Result<Signature> {
+fn verify_hash(input: &str) -> RpcResult<Hash> {
     input
         .parse()
-        .map_err(|e| Error::invalid_params(format!("Invalid param: {e:?}")))
+        .map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Invalid param: {e:?}"), None::<()>))
+}
+
+fn verify_signature(input: &str) -> RpcResult<Signature> {
+    input
+        .parse()
+        .map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Invalid param: {e:?}"), None::<()>))
 }
 
 fn verify_token_account_filter(
     token_account_filter: RpcTokenAccountsFilter,
-) -> Result<TokenAccountsFilter> {
+) -> RpcResult<TokenAccountsFilter> {
     match token_account_filter {
         RpcTokenAccountsFilter::Mint(mint_str) => {
             let mint = verify_pubkey(&mint_str)?;
@@ -2468,7 +2476,7 @@ fn verify_and_parse_signatures_for_address_params(
     before: Option<String>,
     until: Option<String>,
     limit: Option<usize>,
-) -> Result<(Pubkey, Option<Signature>, Option<Signature>, usize)> {
+) -> RpcResult<(Pubkey, Option<Signature>, Option<Signature>, usize)> {
     let address = verify_pubkey(&address)?;
     let before = before
         .map(|ref before| verify_signature(before))
@@ -2477,18 +2485,16 @@ fn verify_and_parse_signatures_for_address_params(
     let limit = limit.unwrap_or(MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT);
 
     if limit == 0 || limit > MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT {
-        return Err(Error::invalid_params(format!(
-            "Invalid limit; max {MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT}"
-        )));
+        return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Invalid limit; max {MAX_GET_CONFIRMED_SIGNATURES_FOR_ADDRESS2_LIMIT}"), None::<()>));
     }
     Ok((address, before, until, limit))
 }
 
-pub(crate) fn check_is_at_least_confirmed(commitment: CommitmentConfig) -> Result<()> {
+pub(crate) fn check_is_at_least_confirmed(commitment: CommitmentConfig) -> RpcResult<()> {
     if !commitment.is_at_least_confirmed() {
-        return Err(Error::invalid_params(
-            "Method does not support commitment below `confirmed`",
-        ));
+        return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+            "Method does not support commitment below `confirmed`".to_string(),
+            None::<()>));
     }
     Ok(())
 }
@@ -2500,7 +2506,7 @@ fn get_encoded_account(
     data_slice: Option<UiDataSliceConfig>,
     // only used for simulation results
     overwrite_accounts: Option<&HashMap<Pubkey, AccountSharedData>>,
-) -> Result<Option<UiAccount>> {
+) -> RpcResult<Option<UiAccount>> {
     match account_resolver::get_account_from_overwrites_or_bank(pubkey, bank, overwrite_accounts) {
         Some(account) => {
             let response = if is_known_spl_token_id(account.owner())
@@ -2521,7 +2527,7 @@ fn encode_account<T: ReadableAccount>(
     pubkey: &Pubkey,
     encoding: UiAccountEncoding,
     data_slice: Option<UiDataSliceConfig>,
-) -> Result<UiAccount> {
+) -> RpcResult<UiAccount> {
     if (encoding == UiAccountEncoding::Binary || encoding == UiAccountEncoding::Base58)
         && data_slice
             .map(|s| min(s.length, account.data().len().saturating_sub(s.offset)))
@@ -2532,11 +2538,11 @@ fn encode_account<T: ReadableAccount>(
             "Encoded binary (base 58) data should be less than {MAX_BASE58_BYTES} bytes, please \
              use Base64 encoding."
         );
-        Err(error::Error {
-            code: error::ErrorCode::InvalidRequest,
+        Err(ErrorObject::owned(
+            ErrorCode::InvalidRequest.code(),
             message,
-            data: None,
-        })
+            None::<()>,
+        ))
     } else {
         Ok(encode_ui_account(
             pubkey, account, encoding, None, data_slice,
@@ -2551,7 +2557,7 @@ fn encode_account<T: ReadableAccount>(
 fn get_spl_token_owner_filter(
     program_id: &Pubkey,
     filters: &[RpcFilterType],
-) -> Result<Option<Pubkey>> {
+) -> RpcResult<Option<Pubkey>> {
     if !is_known_spl_token_id(program_id) {
         return Ok(None);
     }
@@ -2572,11 +2578,11 @@ fn get_spl_token_owner_filter(
                         if bytes.len() == PUBKEY_BYTES {
                             owner_key = Pubkey::try_from(bytes).ok();
                         } else {
-                            return Err(Error::invalid_params(format!(
+                            return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                                 "Incorrect byte length {} for SPL token owner filter, expected {}",
                                 bytes.len(),
                                 PUBKEY_BYTES
-                            )));
+                            ), None::<()>));
                         }
                     }
                 }
@@ -2602,7 +2608,7 @@ fn get_spl_token_owner_filter(
 fn get_spl_token_mint_filter(
     program_id: &Pubkey,
     filters: &[RpcFilterType],
-) -> Result<Option<Pubkey>> {
+) -> RpcResult<Option<Pubkey>> {
     if !is_known_spl_token_id(program_id) {
         return Ok(None);
     }
@@ -2623,11 +2629,11 @@ fn get_spl_token_mint_filter(
                         if bytes.len() == PUBKEY_BYTES {
                             mint = Pubkey::try_from(bytes).ok();
                         } else {
-                            return Err(Error::invalid_params(format!(
+                            return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                                 "Incorrect byte length {} for SPL token mint filter, expected {}",
                                 bytes.len(),
                                 PUBKEY_BYTES
-                            )));
+                            ), None::<()>));
                         }
                     }
                 }
@@ -2651,13 +2657,13 @@ fn get_spl_token_mint_filter(
 fn get_token_program_id_and_mint(
     bank: &Bank,
     token_account_filter: TokenAccountsFilter,
-) -> Result<(Pubkey, Option<Pubkey>)> {
+) -> RpcResult<(Pubkey, Option<Pubkey>)> {
     match token_account_filter {
         TokenAccountsFilter::Mint(mint) => {
             let (mint_owner, _) = get_mint_owner_and_additional_data(bank, &mint)?;
             if !is_known_spl_token_id(&mint_owner) {
-                return Err(Error::invalid_params(
-                    "Invalid param: not a Token mint".to_string(),
+                return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+                    "Invalid param: not a Token mint".to_string(), None::<()>,
                 ));
             }
             Ok((mint_owner, Some(mint)))
@@ -2666,8 +2672,8 @@ fn get_token_program_id_and_mint(
             if is_known_spl_token_id(&program_id) {
                 Ok((program_id, None))
             } else {
-                Err(Error::invalid_params(
-                    "Invalid param: unrecognized Token program id".to_string(),
+                Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+                    "Invalid param: unrecognized Token program id".to_string(), None::<()>,
                 ))
             }
         }
@@ -2683,7 +2689,7 @@ fn _send_transaction(
     last_valid_block_height: u64,
     durable_nonce_info: Option<(Pubkey, Hash)>,
     max_retries: Option<usize>,
-) -> Result<String> {
+) -> RpcResult<String> {
     let transaction_info = TransactionInfo::new(
         message_hash,
         signature,
@@ -2704,109 +2710,109 @@ fn _send_transaction(
 // Minimal RPC interface that known validators are expected to provide
 pub mod rpc_minimal {
     use super::*;
-    #[rpc]
-    pub trait Minimal {
-        type Metadata;
 
-        #[rpc(meta, name = "getBalance")]
-        fn get_balance(
-            &self,
-            meta: Self::Metadata,
-            pubkey_str: String,
-            config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<u64>>;
-
-        #[rpc(meta, name = "getEpochInfo")]
-        fn get_epoch_info(
-            &self,
-            meta: Self::Metadata,
-            config: Option<RpcContextConfig>,
-        ) -> Result<EpochInfo>;
-
-        #[rpc(meta, name = "getGenesisHash")]
-        fn get_genesis_hash(&self, meta: Self::Metadata) -> Result<String>;
-
-        #[rpc(meta, name = "getHealth")]
-        fn get_health(&self, meta: Self::Metadata) -> Result<String>;
-
-        #[rpc(meta, name = "getIdentity")]
-        fn get_identity(&self, meta: Self::Metadata) -> Result<RpcIdentity>;
-
-        #[rpc(meta, name = "getSlot")]
-        fn get_slot(&self, meta: Self::Metadata, config: Option<RpcContextConfig>) -> Result<Slot>;
-
-        #[rpc(meta, name = "getBlockHeight")]
-        fn get_block_height(
-            &self,
-            meta: Self::Metadata,
-            config: Option<RpcContextConfig>,
-        ) -> Result<u64>;
-
-        #[rpc(meta, name = "getHighestSnapshotSlot")]
-        fn get_highest_snapshot_slot(&self, meta: Self::Metadata) -> Result<RpcSnapshotSlotInfo>;
-
-        #[rpc(meta, name = "getTransactionCount")]
-        fn get_transaction_count(
-            &self,
-            meta: Self::Metadata,
-            config: Option<RpcContextConfig>,
-        ) -> Result<u64>;
-
-        #[rpc(meta, name = "getVersion")]
-        fn get_version(&self, meta: Self::Metadata) -> Result<RpcVersionInfo>;
-
-        // TODO: Refactor `agave-validator wait-for-restart-window` to not require this method, so
-        //       it can be removed from rpc_minimal
-        #[rpc(meta, name = "getVoteAccounts")]
-        fn get_vote_accounts(
-            &self,
-            meta: Self::Metadata,
-            config: Option<RpcGetVoteAccountsConfig>,
-        ) -> Result<RpcVoteAccountStatus>;
-
-        // TODO: Refactor `agave-validator wait-for-restart-window` to not require this method, so
-        //       it can be removed from rpc_minimal
-        #[rpc(meta, name = "getLeaderSchedule")]
-        fn get_leader_schedule(
-            &self,
-            meta: Self::Metadata,
-            options: Option<RpcLeaderScheduleConfigWrapper>,
-            config: Option<RpcLeaderScheduleConfig>,
-        ) -> Result<Option<RpcLeaderSchedule>>;
+    /// RPC implementation for minimal API
+    pub struct MinimalRpcServer {
+        pub request_processor: JsonRpcRequestProcessor,
     }
 
-    pub struct MinimalImpl;
-    impl Minimal for MinimalImpl {
-        type Metadata = JsonRpcRequestProcessor;
+    impl MinimalRpcServer {
+        pub fn new(request_processor: JsonRpcRequestProcessor) -> Self {
+            Self { request_processor }
+        }
+    }
 
-        fn get_balance(
+    #[rpc(server)]
+    pub trait MinimalApi {
+        #[method(name = "getBalance")]
+        async fn get_balance(
             &self,
-            meta: Self::Metadata,
             pubkey_str: String,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<u64>> {
+        ) -> RpcResult<RpcResponse<u64>>;
+
+        #[method(name = "getEpochInfo")]
+        async fn get_epoch_info(
+            &self,
+            config: Option<RpcContextConfig>,
+        ) -> RpcResult<EpochInfo>;
+
+        #[method(name = "getGenesisHash")]
+        async fn get_genesis_hash(&self) -> RpcResult<String>;
+
+        #[method(name = "getHealth")]
+        async fn get_health(&self) -> RpcResult<String>;
+
+        #[method(name = "getIdentity")]
+        async fn get_identity(&self) -> RpcResult<RpcIdentity>;
+
+        #[method(name = "getSlot")]
+        async fn get_slot(&self, config: Option<RpcContextConfig>) -> RpcResult<Slot>;
+
+        #[method(name = "getBlockHeight")]
+        async fn get_block_height(
+            &self,
+            config: Option<RpcContextConfig>,
+        ) -> RpcResult<u64>;
+
+        #[method(name = "getHighestSnapshotSlot")]
+        async fn get_highest_snapshot_slot(&self) -> RpcResult<RpcSnapshotSlotInfo>;
+
+        #[method(name = "getTransactionCount")]
+        async fn get_transaction_count(
+            &self,
+            config: Option<RpcContextConfig>,
+        ) -> RpcResult<u64>;
+
+        #[method(name = "getVersion")]
+        async fn get_version(&self) -> RpcResult<RpcVersionInfo>;
+
+        // TODO: Refactor `agave-validator wait-for-restart-window` to not require this method, so
+        //       it can be removed from rpc_minimal
+        #[method(name = "getVoteAccounts")]
+        async fn get_vote_accounts(
+            &self,
+            config: Option<RpcGetVoteAccountsConfig>,
+        ) -> RpcResult<RpcVoteAccountStatus>;
+
+        // TODO: Refactor `agave-validator wait-for-restart-window` to not require this method, so
+        //       it can be removed from rpc_minimal
+        #[method(name = "getLeaderSchedule")]
+        async fn get_leader_schedule(
+            &self,
+            options: Option<RpcLeaderScheduleConfigWrapper>,
+            config: Option<RpcLeaderScheduleConfig>,
+        ) -> RpcResult<Option<RpcLeaderSchedule>>;
+    }
+
+    #[async_trait]
+    impl MinimalApiServer for MinimalRpcServer {
+        async fn get_balance(
+            &self,
+            pubkey_str: String,
+            config: Option<RpcContextConfig>,
+        ) -> RpcResult<RpcResponse<u64>> {
             debug!("get_balance rpc request received: {pubkey_str:?}");
             let pubkey = verify_pubkey(&pubkey_str)?;
-            meta.get_balance(&pubkey, config.unwrap_or_default())
+            self.request_processor.get_balance(&pubkey, config.unwrap_or_default())
         }
 
-        fn get_epoch_info(
+        async fn get_epoch_info(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcContextConfig>,
-        ) -> Result<EpochInfo> {
+        ) -> RpcResult<EpochInfo> {
             debug!("get_epoch_info rpc request received");
-            let bank = meta.get_bank_with_config(config.unwrap_or_default())?;
+            let bank = self.request_processor.get_bank_with_config(config.unwrap_or_default())?;
             Ok(bank.get_epoch_info())
         }
 
-        fn get_genesis_hash(&self, meta: Self::Metadata) -> Result<String> {
+        async fn get_genesis_hash(&self) -> RpcResult<String> {
             debug!("get_genesis_hash rpc request received");
-            Ok(meta.genesis_hash.to_string())
+            Ok(self.request_processor.genesis_hash.to_string())
         }
 
-        fn get_health(&self, meta: Self::Metadata) -> Result<String> {
-            match meta.health.check() {
+        async fn get_health(&self) -> RpcResult<String> {
+            match self.request_processor.health.check() {
                 RpcHealthStatus::Ok => Ok("ok".to_string()),
                 RpcHealthStatus::Unknown => Err(RpcCustomError::NodeUnhealthy {
                     num_slots_behind: None,
@@ -2819,36 +2825,36 @@ pub mod rpc_minimal {
             }
         }
 
-        fn get_identity(&self, meta: Self::Metadata) -> Result<RpcIdentity> {
+        async fn get_identity(&self) -> RpcResult<RpcIdentity> {
             debug!("get_identity rpc request received");
             Ok(RpcIdentity {
-                identity: meta.cluster_info.id().to_string(),
+                identity: self.request_processor.cluster_info.id().to_string(),
             })
         }
 
-        fn get_slot(&self, meta: Self::Metadata, config: Option<RpcContextConfig>) -> Result<Slot> {
+        async fn get_slot(&self, config: Option<RpcContextConfig>) -> RpcResult<Slot> {
             debug!("get_slot rpc request received");
-            meta.get_slot(config.unwrap_or_default())
+            self.request_processor.get_slot(config.unwrap_or_default())
         }
 
-        fn get_block_height(
+        async fn get_block_height(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcContextConfig>,
-        ) -> Result<u64> {
+        ) -> RpcResult<u64> {
             debug!("get_block_height rpc request received");
-            meta.get_block_height(config.unwrap_or_default())
+            self.request_processor.get_block_height(config.unwrap_or_default())
         }
 
-        fn get_highest_snapshot_slot(&self, meta: Self::Metadata) -> Result<RpcSnapshotSlotInfo> {
+        async fn get_highest_snapshot_slot(&self) -> RpcResult<RpcSnapshotSlotInfo> {
             debug!("get_highest_snapshot_slot rpc request received");
 
-            if meta.snapshot_config.is_none() {
+            if self.request_processor.snapshot_config.is_none() {
                 return Err(RpcCustomError::NoSnapshot.into());
             }
 
-            let (full_snapshot_archives_dir, incremental_snapshot_archives_dir) = meta
+            let (full_snapshot_archives_dir, incremental_snapshot_archives_dir) = self.request_processor
                 .snapshot_config
+                .clone()
                 .map(|snapshot_config| {
                     (
                         snapshot_config.full_snapshot_archives_dir,
@@ -2872,16 +2878,15 @@ pub mod rpc_minimal {
             })
         }
 
-        fn get_transaction_count(
+        async fn get_transaction_count(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcContextConfig>,
-        ) -> Result<u64> {
+        ) -> RpcResult<u64> {
             debug!("get_transaction_count rpc request received");
-            meta.get_transaction_count(config.unwrap_or_default())
+            self.request_processor.get_transaction_count(config.unwrap_or_default())
         }
 
-        fn get_version(&self, _: Self::Metadata) -> Result<RpcVersionInfo> {
+        async fn get_version(&self) -> RpcResult<RpcVersionInfo> {
             debug!("get_version rpc request received");
             let version = solana_version::Version::default();
             Ok(RpcVersionInfo {
@@ -2892,23 +2897,21 @@ pub mod rpc_minimal {
 
         // TODO: Refactor `agave-validator wait-for-restart-window` to not require this method, so
         //       it can be removed from rpc_minimal
-        fn get_vote_accounts(
+        async fn get_vote_accounts(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcGetVoteAccountsConfig>,
-        ) -> Result<RpcVoteAccountStatus> {
+        ) -> RpcResult<RpcVoteAccountStatus> {
             debug!("get_vote_accounts rpc request received");
-            meta.get_vote_accounts(config)
+            self.request_processor.get_vote_accounts(config)
         }
 
         // TODO: Refactor `agave-validator wait-for-restart-window` to not require this method, so
         //       it can be removed from rpc_minimal
-        fn get_leader_schedule(
+        async fn get_leader_schedule(
             &self,
-            meta: Self::Metadata,
             options: Option<RpcLeaderScheduleConfigWrapper>,
             config: Option<RpcLeaderScheduleConfig>,
-        ) -> Result<Option<RpcLeaderSchedule>> {
+        ) -> RpcResult<Option<RpcLeaderSchedule>> {
             let (slot, maybe_config) = options.map(|options| options.unzip()).unwrap_or_default();
             let config = maybe_config.or(config).unwrap_or_default();
 
@@ -2916,13 +2919,13 @@ pub mod rpc_minimal {
                 let _ = verify_pubkey(identity)?;
             }
 
-            let bank = meta.bank(config.commitment);
+            let bank = self.request_processor.bank(config.commitment);
             let slot = slot.unwrap_or_else(|| bank.slot());
             let epoch = bank.epoch_schedule().get_epoch(slot);
 
             debug!("get_leader_schedule rpc request received: {slot:?}");
 
-            Ok(meta
+            Ok(self.request_processor
                 .leader_schedule_cache
                 .get_epoch_leader_schedule(epoch)
                 .map(|leader_schedule| {
@@ -2943,126 +2946,130 @@ pub mod rpc_minimal {
 // Expected to be provided by API nodes
 pub mod rpc_bank {
     use super::*;
-    #[rpc]
-    pub trait BankData {
-        type Metadata;
 
-        #[rpc(meta, name = "getMinimumBalanceForRentExemption")]
-        fn get_minimum_balance_for_rent_exemption(
-            &self,
-            meta: Self::Metadata,
-            data_len: usize,
-            commitment: Option<CommitmentConfig>,
-        ) -> Result<u64>;
-
-        #[rpc(meta, name = "getInflationGovernor")]
-        fn get_inflation_governor(
-            &self,
-            meta: Self::Metadata,
-            commitment: Option<CommitmentConfig>,
-        ) -> Result<RpcInflationGovernor>;
-
-        #[rpc(meta, name = "getInflationRate")]
-        fn get_inflation_rate(&self, meta: Self::Metadata) -> Result<RpcInflationRate>;
-
-        #[rpc(meta, name = "getEpochSchedule")]
-        fn get_epoch_schedule(&self, meta: Self::Metadata) -> Result<EpochSchedule>;
-
-        #[rpc(meta, name = "getSlotLeader")]
-        fn get_slot_leader(
-            &self,
-            meta: Self::Metadata,
-            config: Option<RpcContextConfig>,
-        ) -> Result<String>;
-
-        #[rpc(meta, name = "getSlotLeaders")]
-        fn get_slot_leaders(
-            &self,
-            meta: Self::Metadata,
-            start_slot: Slot,
-            limit: u64,
-        ) -> Result<Vec<String>>;
-
-        #[rpc(meta, name = "getBlockProduction")]
-        fn get_block_production(
-            &self,
-            meta: Self::Metadata,
-            config: Option<RpcBlockProductionConfig>,
-        ) -> Result<RpcResponse<RpcBlockProduction>>;
+    /// RPC implementation for bank data
+    pub struct BankDataRpcServer {
+        pub request_processor: JsonRpcRequestProcessor,
     }
 
-    pub struct BankDataImpl;
-    impl BankData for BankDataImpl {
-        type Metadata = JsonRpcRequestProcessor;
+    impl BankDataRpcServer {
+        pub fn new(request_processor: JsonRpcRequestProcessor) -> Self {
+            Self { request_processor }
+        }
+    }
 
-        fn get_minimum_balance_for_rent_exemption(
+    #[rpc(server)]
+    pub trait BankDataApi {
+        #[method(name = "getMinimumBalanceForRentExemption")]
+        async fn get_minimum_balance_for_rent_exemption(
             &self,
-            meta: Self::Metadata,
             data_len: usize,
             commitment: Option<CommitmentConfig>,
-        ) -> Result<u64> {
-            debug!("get_minimum_balance_for_rent_exemption rpc request received: {data_len:?}");
-            if data_len as u64 > solana_system_interface::MAX_PERMITTED_DATA_LENGTH {
-                return Err(Error::invalid_request());
-            }
-            Ok(meta.get_minimum_balance_for_rent_exemption(data_len, commitment))
-        }
+        ) -> RpcResult<u64>;
 
-        fn get_inflation_governor(
+        #[method(name = "getInflationGovernor")]
+        async fn get_inflation_governor(
             &self,
-            meta: Self::Metadata,
             commitment: Option<CommitmentConfig>,
-        ) -> Result<RpcInflationGovernor> {
-            debug!("get_inflation_governor rpc request received");
-            Ok(meta.get_inflation_governor(commitment))
-        }
+        ) -> RpcResult<RpcInflationGovernor>;
 
-        fn get_inflation_rate(&self, meta: Self::Metadata) -> Result<RpcInflationRate> {
-            debug!("get_inflation_rate rpc request received");
-            Ok(meta.get_inflation_rate())
-        }
+        #[method(name = "getInflationRate")]
+        async fn get_inflation_rate(&self) -> RpcResult<RpcInflationRate>;
 
-        fn get_epoch_schedule(&self, meta: Self::Metadata) -> Result<EpochSchedule> {
-            debug!("get_epoch_schedule rpc request received");
-            Ok(meta.get_epoch_schedule())
-        }
+        #[method(name = "getEpochSchedule")]
+        async fn get_epoch_schedule(&self) -> RpcResult<EpochSchedule>;
 
-        fn get_slot_leader(
+        #[method(name = "getSlotLeader")]
+        async fn get_slot_leader(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcContextConfig>,
-        ) -> Result<String> {
-            debug!("get_slot_leader rpc request received");
-            meta.get_slot_leader(config.unwrap_or_default())
-        }
+        ) -> RpcResult<String>;
 
-        fn get_slot_leaders(
+        #[method(name = "getSlotLeaders")]
+        async fn get_slot_leaders(
             &self,
-            meta: Self::Metadata,
             start_slot: Slot,
             limit: u64,
-        ) -> Result<Vec<String>> {
+        ) -> RpcResult<Vec<String>>;
+
+        #[method(name = "getBlockProduction")]
+        async fn get_block_production(
+            &self,
+            config: Option<RpcBlockProductionConfig>,
+        ) -> RpcResult<RpcResponse<RpcBlockProduction>>;
+    }
+
+    #[async_trait]
+    impl BankDataApiServer for BankDataRpcServer {
+        async fn get_minimum_balance_for_rent_exemption(
+            &self,
+            data_len: usize,
+            commitment: Option<CommitmentConfig>,
+        ) -> RpcResult<u64> {
+            debug!("get_minimum_balance_for_rent_exemption rpc request received: {data_len:?}");
+            if data_len as u64 > solana_system_interface::MAX_PERMITTED_DATA_LENGTH {
+                return Err(ErrorObject::owned(
+                    ErrorCode::InvalidRequest.code(),
+                    "Invalid request".to_string(),
+                    None::<()>,
+                ));
+            }
+            Ok(self.request_processor.get_minimum_balance_for_rent_exemption(data_len, commitment))
+        }
+
+        async fn get_inflation_governor(
+            &self,
+            commitment: Option<CommitmentConfig>,
+        ) -> RpcResult<RpcInflationGovernor> {
+            debug!("get_inflation_governor rpc request received");
+            Ok(self.request_processor.get_inflation_governor(commitment))
+        }
+
+        async fn get_inflation_rate(&self) -> RpcResult<RpcInflationRate> {
+            debug!("get_inflation_rate rpc request received");
+            Ok(self.request_processor.get_inflation_rate())
+        }
+
+        async fn get_epoch_schedule(&self) -> RpcResult<EpochSchedule> {
+            debug!("get_epoch_schedule rpc request received");
+            Ok(self.request_processor.get_epoch_schedule())
+        }
+
+        async fn get_slot_leader(
+            &self,
+            config: Option<RpcContextConfig>,
+        ) -> RpcResult<String> {
+            debug!("get_slot_leader rpc request received");
+            self.request_processor.get_slot_leader(config.unwrap_or_default())
+        }
+
+        async fn get_slot_leaders(
+            &self,
+            start_slot: Slot,
+            limit: u64,
+        ) -> RpcResult<Vec<String>> {
             debug!("get_slot_leaders rpc request received (start: {start_slot} limit: {limit})");
 
             let limit = limit as usize;
             if limit > MAX_GET_SLOT_LEADERS {
-                return Err(Error::invalid_params(format!(
-                    "Invalid limit; max {MAX_GET_SLOT_LEADERS}"
-                )));
+                return Err(ErrorObject::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!("Invalid limit; max {MAX_GET_SLOT_LEADERS}"),
+                    None::<()>,
+                ));
             }
 
-            Ok(meta
+            Ok(self.request_processor
                 .get_slot_leaders(None, start_slot, limit)?
                 .into_iter()
                 .map(|identity| identity.to_string())
                 .collect())
         }
 
-        fn get_block_production(
+        async fn get_block_production(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcBlockProductionConfig>,
-        ) -> Result<RpcResponse<RpcBlockProduction>> {
+        ) -> RpcResult<RpcResponse<RpcBlockProduction>> {
             debug!("get_block_production rpc request received");
 
             let config = config.unwrap_or_default();
@@ -3072,7 +3079,7 @@ pub mod rpc_bank {
                 None
             };
 
-            let bank = meta.bank(config.commitment);
+            let bank = self.request_processor.bank(config.commitment);
             let (first_slot, last_slot) = match config.range {
                 None => (
                     bank.epoch_schedule().get_first_slot_in_epoch(bank.epoch()),
@@ -3082,9 +3089,11 @@ pub mod rpc_bank {
                     let first_slot = range.first_slot;
                     let last_slot = range.last_slot.unwrap_or_else(|| bank.slot());
                     if last_slot < first_slot {
-                        return Err(Error::invalid_params(format!(
-                            "lastSlot, {last_slot}, cannot be less than firstSlot, {first_slot}"
-                        )));
+                        return Err(ErrorObject::owned(
+                            ErrorCode::InvalidParams.code(),
+                            format!("lastSlot, {last_slot}, cannot be less than firstSlot, {first_slot}"),
+                            None::<()>,
+                        ));
                     }
                     (first_slot, last_slot)
                 }
@@ -3092,21 +3101,29 @@ pub mod rpc_bank {
 
             let slot_history = bank.get_slot_history();
             if first_slot < slot_history.oldest() {
-                return Err(Error::invalid_params(format!(
-                    "firstSlot, {}, is too small; min {}",
-                    first_slot,
-                    slot_history.oldest()
-                )));
+                return Err(ErrorObject::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!(
+                        "firstSlot, {}, is too small; min {}",
+                        first_slot,
+                        slot_history.oldest()
+                    ),
+                    None::<()>,
+                ));
             }
             if last_slot > slot_history.newest() {
-                return Err(Error::invalid_params(format!(
-                    "lastSlot, {}, is too large; max {}",
-                    last_slot,
-                    slot_history.newest()
-                )));
+                return Err(ErrorObject::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!(
+                        "lastSlot, {}, is too large; max {}",
+                        last_slot,
+                        slot_history.newest()
+                    ),
+                    None::<()>,
+                ));
             }
 
-            let slot_leaders = meta.get_slot_leaders(
+            let slot_leaders = self.request_processor.get_slot_leaders(
                 config.commitment,
                 first_slot,
                 last_slot.saturating_sub(first_slot) as usize + 1, // +1 because last_slot is inclusive
@@ -3152,130 +3169,124 @@ pub mod rpc_bank {
 // Expected to be provided by API nodes
 pub mod rpc_accounts {
     use super::*;
-    #[rpc]
-    pub trait AccountsData {
-        type Metadata;
 
-        #[rpc(meta, name = "getAccountInfo")]
-        fn get_account_info(
+    /// RPC implementation for accounts data
+    pub struct AccountsDataRpcServer {
+        pub request_processor: JsonRpcRequestProcessor,
+    }
+
+    impl AccountsDataRpcServer {
+        pub fn new(request_processor: JsonRpcRequestProcessor) -> Self {
+            Self { request_processor }
+        }
+    }
+
+    #[rpc(server)]
+    pub trait AccountsDataApi {
+        #[method(name = "getAccountInfo")]
+        async fn get_account_info(
             &self,
-            meta: Self::Metadata,
             pubkey_str: String,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Option<UiAccount>>>>;
+        ) -> RpcResult<RpcResponse<Option<UiAccount>>>;
 
-        #[rpc(meta, name = "getMultipleAccounts")]
-        fn get_multiple_accounts(
+        #[method(name = "getMultipleAccounts")]
+        async fn get_multiple_accounts(
             &self,
-            meta: Self::Metadata,
             pubkey_strs: Vec<String>,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<Option<UiAccount>>>>>;
+        ) -> RpcResult<RpcResponse<Vec<Option<UiAccount>>>>;
 
-        #[rpc(meta, name = "getBlockCommitment")]
-        fn get_block_commitment(
+        #[method(name = "getBlockCommitment")]
+        async fn get_block_commitment(
             &self,
-            meta: Self::Metadata,
             block: Slot,
-        ) -> Result<RpcBlockCommitment<BlockCommitmentArray>>;
+        ) -> RpcResult<RpcBlockCommitment<BlockCommitmentArray>>;
 
         // SPL Token-specific RPC endpoints
         // See https://github.com/solana-labs/solana-program-library/releases/tag/token-v2.0.0 for
         // program details
 
-        #[rpc(meta, name = "getTokenAccountBalance")]
-        fn get_token_account_balance(
+        #[method(name = "getTokenAccountBalance")]
+        async fn get_token_account_balance(
             &self,
-            meta: Self::Metadata,
             pubkey_str: String,
             commitment: Option<CommitmentConfig>,
-        ) -> Result<RpcResponse<UiTokenAmount>>;
+        ) -> RpcResult<RpcResponse<UiTokenAmount>>;
 
-        #[rpc(meta, name = "getTokenSupply")]
-        fn get_token_supply(
+        #[method(name = "getTokenSupply")]
+        async fn get_token_supply(
             &self,
-            meta: Self::Metadata,
             mint_str: String,
             commitment: Option<CommitmentConfig>,
-        ) -> Result<RpcResponse<UiTokenAmount>>;
+        ) -> RpcResult<RpcResponse<UiTokenAmount>>;
     }
 
-    pub struct AccountsDataImpl;
-    impl AccountsData for AccountsDataImpl {
-        type Metadata = JsonRpcRequestProcessor;
-
-        fn get_account_info(
+    #[async_trait]
+    impl AccountsDataApiServer for AccountsDataRpcServer {
+        async fn get_account_info(
             &self,
-            meta: Self::Metadata,
             pubkey_str: String,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Option<UiAccount>>>> {
+        ) -> RpcResult<RpcResponse<Option<UiAccount>>> {
             debug!("get_account_info rpc request received: {pubkey_str:?}");
-            async move {
-                let pubkey = verify_pubkey(&pubkey_str)?;
-                meta.get_account_info(pubkey, config).await
-            }
-            .boxed()
+            let pubkey = verify_pubkey(&pubkey_str)?;
+            self.request_processor.get_account_info(pubkey, config).await
         }
 
-        fn get_multiple_accounts(
+        async fn get_multiple_accounts(
             &self,
-            meta: Self::Metadata,
             pubkey_strs: Vec<String>,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<Option<UiAccount>>>>> {
+        ) -> RpcResult<RpcResponse<Vec<Option<UiAccount>>>> {
             debug!(
                 "get_multiple_accounts rpc request received: {:?}",
                 pubkey_strs.len()
             );
-            async move {
-                let max_multiple_accounts = meta
-                    .config
-                    .max_multiple_accounts
-                    .unwrap_or(MAX_MULTIPLE_ACCOUNTS);
-                if pubkey_strs.len() > max_multiple_accounts {
-                    return Err(Error::invalid_params(format!(
-                        "Too many inputs provided; max {max_multiple_accounts}"
-                    )));
-                }
-                let pubkeys = pubkey_strs
-                    .into_iter()
-                    .map(|pubkey_str| verify_pubkey(&pubkey_str))
-                    .collect::<Result<Vec<_>>>()?;
-                meta.get_multiple_accounts(pubkeys, config).await
+            let max_multiple_accounts = self.request_processor
+                .config
+                .max_multiple_accounts
+                .unwrap_or(MAX_MULTIPLE_ACCOUNTS);
+            if pubkey_strs.len() > max_multiple_accounts {
+                return Err(ErrorObject::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!("Too many inputs provided; max {max_multiple_accounts}"),
+                    None::<()>,
+                ));
             }
-            .boxed()
+            let pubkeys = pubkey_strs
+                .into_iter()
+                .map(|pubkey_str| verify_pubkey(&pubkey_str))
+                .collect::<RpcResult<Vec<_>>>()?;
+            self.request_processor.get_multiple_accounts(pubkeys, config).await
         }
 
-        fn get_block_commitment(
+        async fn get_block_commitment(
             &self,
-            meta: Self::Metadata,
             block: Slot,
-        ) -> Result<RpcBlockCommitment<BlockCommitmentArray>> {
+        ) -> RpcResult<RpcBlockCommitment<BlockCommitmentArray>> {
             debug!("get_block_commitment rpc request received");
-            Ok(meta.get_block_commitment(block))
+            Ok(self.request_processor.get_block_commitment(block))
         }
 
-        fn get_token_account_balance(
+        async fn get_token_account_balance(
             &self,
-            meta: Self::Metadata,
             pubkey_str: String,
             commitment: Option<CommitmentConfig>,
-        ) -> Result<RpcResponse<UiTokenAmount>> {
+        ) -> RpcResult<RpcResponse<UiTokenAmount>> {
             debug!("get_token_account_balance rpc request received: {pubkey_str:?}");
             let pubkey = verify_pubkey(&pubkey_str)?;
-            meta.get_token_account_balance(&pubkey, commitment)
+            self.request_processor.get_token_account_balance(&pubkey, commitment)
         }
 
-        fn get_token_supply(
+        async fn get_token_supply(
             &self,
-            meta: Self::Metadata,
             mint_str: String,
             commitment: Option<CommitmentConfig>,
-        ) -> Result<RpcResponse<UiTokenAmount>> {
+        ) -> RpcResult<RpcResponse<UiTokenAmount>> {
             debug!("get_token_supply rpc request received: {mint_str:?}");
             let mint = verify_pubkey(&mint_str)?;
-            meta.get_token_supply(&mint, commitment)
+            self.request_processor.get_token_supply(&mint, commitment)
         }
     }
 }
@@ -3285,157 +3296,141 @@ pub mod rpc_accounts {
 // the future.
 pub mod rpc_accounts_scan {
     use super::*;
-    #[rpc]
-    pub trait AccountsScan {
-        type Metadata;
 
-        #[rpc(meta, name = "getProgramAccounts")]
-        fn get_program_accounts(
+    /// RPC implementation for accounts scan
+    pub struct AccountsScanRpcServer {
+        pub request_processor: JsonRpcRequestProcessor,
+    }
+
+    impl AccountsScanRpcServer {
+        pub fn new(request_processor: JsonRpcRequestProcessor) -> Self {
+            Self { request_processor }
+        }
+    }
+
+    #[rpc(server)]
+    pub trait AccountsScanApi {
+        #[method(name = "getProgramAccounts")]
+        async fn get_program_accounts(
             &self,
-            meta: Self::Metadata,
             program_id_str: String,
             config: Option<RpcProgramAccountsConfig>,
-        ) -> BoxFuture<Result<OptionalContext<Vec<RpcKeyedAccount>>>>;
+        ) -> RpcResult<OptionalContext<Vec<RpcKeyedAccount>>>;
 
-        #[rpc(meta, name = "getLargestAccounts")]
-        fn get_largest_accounts(
+        #[method(name = "getLargestAccounts")]
+        async fn get_largest_accounts(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcLargestAccountsConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcAccountBalance>>>>;
+        ) -> RpcResult<RpcResponse<Vec<RpcAccountBalance>>>;
 
-        #[rpc(meta, name = "getSupply")]
-        fn get_supply(
+        #[method(name = "getSupply")]
+        async fn get_supply(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcSupplyConfig>,
-        ) -> BoxFuture<Result<RpcResponse<RpcSupply>>>;
+        ) -> RpcResult<RpcResponse<RpcSupply>>;
 
         // SPL Token-specific RPC endpoints
         // See https://github.com/solana-labs/solana-program-library/releases/tag/token-v2.0.0 for
         // program details
 
-        #[rpc(meta, name = "getTokenLargestAccounts")]
-        fn get_token_largest_accounts(
+        #[method(name = "getTokenLargestAccounts")]
+        async fn get_token_largest_accounts(
             &self,
-            meta: Self::Metadata,
             mint_str: String,
             commitment: Option<CommitmentConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcTokenAccountBalance>>>>;
+        ) -> RpcResult<RpcResponse<Vec<RpcTokenAccountBalance>>>;
 
-        #[rpc(meta, name = "getTokenAccountsByOwner")]
-        fn get_token_accounts_by_owner(
+        #[method(name = "getTokenAccountsByOwner")]
+        async fn get_token_accounts_by_owner(
             &self,
-            meta: Self::Metadata,
             owner_str: String,
             token_account_filter: RpcTokenAccountsFilter,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcKeyedAccount>>>>;
+        ) -> RpcResult<RpcResponse<Vec<RpcKeyedAccount>>>;
 
-        #[rpc(meta, name = "getTokenAccountsByDelegate")]
-        fn get_token_accounts_by_delegate(
+        #[method(name = "getTokenAccountsByDelegate")]
+        async fn get_token_accounts_by_delegate(
             &self,
-            meta: Self::Metadata,
             delegate_str: String,
             token_account_filter: RpcTokenAccountsFilter,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcKeyedAccount>>>>;
+        ) -> RpcResult<RpcResponse<Vec<RpcKeyedAccount>>>;
     }
 
-    pub struct AccountsScanImpl;
-    impl AccountsScan for AccountsScanImpl {
-        type Metadata = JsonRpcRequestProcessor;
-
-        fn get_program_accounts(
+    #[async_trait]
+    impl AccountsScanApiServer for AccountsScanRpcServer {
+        async fn get_program_accounts(
             &self,
-            meta: Self::Metadata,
             program_id_str: String,
             config: Option<RpcProgramAccountsConfig>,
-        ) -> BoxFuture<Result<OptionalContext<Vec<RpcKeyedAccount>>>> {
+        ) -> RpcResult<OptionalContext<Vec<RpcKeyedAccount>>> {
             debug!("get_program_accounts rpc request received: {program_id_str:?}");
-            async move {
-                let program_id = verify_pubkey(&program_id_str)?;
-                let (config, filters, with_context, sort_results) = if let Some(config) = config {
-                    (
-                        Some(config.account_config),
-                        config.filters.unwrap_or_default(),
-                        config.with_context.unwrap_or_default(),
-                        config.sort_results.unwrap_or(true),
-                    )
-                } else {
-                    (None, vec![], false, true)
-                };
-                verify_filters(&filters)?;
-                meta.get_program_accounts(program_id, config, filters, with_context, sort_results)
-                    .await
-            }
-            .boxed()
+            let program_id = verify_pubkey(&program_id_str)?;
+            let (config, filters, with_context, sort_results) = if let Some(config) = config {
+                (
+                    Some(config.account_config),
+                    config.filters.unwrap_or_default(),
+                    config.with_context.unwrap_or_default(),
+                    config.sort_results.unwrap_or(true),
+                )
+            } else {
+                (None, vec![], false, true)
+            };
+            verify_filters(&filters)?;
+            self.request_processor.get_program_accounts(program_id, config, filters, with_context, sort_results)
+                .await
         }
 
-        fn get_largest_accounts(
+        async fn get_largest_accounts(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcLargestAccountsConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcAccountBalance>>>> {
+        ) -> RpcResult<RpcResponse<Vec<RpcAccountBalance>>> {
             debug!("get_largest_accounts rpc request received");
-            async move { Ok(meta.get_largest_accounts(config).await?) }.boxed()
+            Ok(self.request_processor.get_largest_accounts(config).await?)
         }
 
-        fn get_supply(
+        async fn get_supply(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcSupplyConfig>,
-        ) -> BoxFuture<Result<RpcResponse<RpcSupply>>> {
+        ) -> RpcResult<RpcResponse<RpcSupply>> {
             debug!("get_supply rpc request received");
-            async move { Ok(meta.get_supply(config).await?) }.boxed()
+            Ok(self.request_processor.get_supply(config).await?)
         }
 
-        fn get_token_largest_accounts(
+        async fn get_token_largest_accounts(
             &self,
-            meta: Self::Metadata,
             mint_str: String,
             commitment: Option<CommitmentConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcTokenAccountBalance>>>> {
+        ) -> RpcResult<RpcResponse<Vec<RpcTokenAccountBalance>>> {
             debug!("get_token_largest_accounts rpc request received: {mint_str:?}");
-            async move {
-                let mint = verify_pubkey(&mint_str)?;
-                meta.get_token_largest_accounts(mint, commitment).await
-            }
-            .boxed()
+            let mint = verify_pubkey(&mint_str)?;
+            self.request_processor.get_token_largest_accounts(mint, commitment).await
         }
 
-        fn get_token_accounts_by_owner(
+        async fn get_token_accounts_by_owner(
             &self,
-            meta: Self::Metadata,
             owner_str: String,
             token_account_filter: RpcTokenAccountsFilter,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcKeyedAccount>>>> {
+        ) -> RpcResult<RpcResponse<Vec<RpcKeyedAccount>>> {
             debug!("get_token_accounts_by_owner rpc request received: {owner_str:?}");
-            async move {
-                let owner = verify_pubkey(&owner_str)?;
-                let token_account_filter = verify_token_account_filter(token_account_filter)?;
-                meta.get_token_accounts_by_owner(owner, token_account_filter, config, true)
-                    .await
-            }
-            .boxed()
+            let owner = verify_pubkey(&owner_str)?;
+            let token_account_filter = verify_token_account_filter(token_account_filter)?;
+            self.request_processor.get_token_accounts_by_owner(owner, token_account_filter, config, true)
+                .await
         }
 
-        fn get_token_accounts_by_delegate(
+        async fn get_token_accounts_by_delegate(
             &self,
-            meta: Self::Metadata,
             delegate_str: String,
             token_account_filter: RpcTokenAccountsFilter,
             config: Option<RpcAccountInfoConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<RpcKeyedAccount>>>> {
+        ) -> RpcResult<RpcResponse<Vec<RpcKeyedAccount>>> {
             debug!("get_token_accounts_by_delegate rpc request received: {delegate_str:?}");
-            async move {
-                let delegate = verify_pubkey(&delegate_str)?;
-                let token_account_filter = verify_token_account_filter(token_account_filter)?;
-                meta.get_token_accounts_by_delegate(delegate, token_account_filter, config, true)
-                    .await
-            }
-            .boxed()
+            let delegate = verify_pubkey(&delegate_str)?;
+            let token_account_filter = verify_token_account_filter(token_account_filter)?;
+            self.request_processor.get_token_accounts_by_delegate(delegate, token_account_filter, config, true)
+                .await
         }
     }
 }
@@ -3448,194 +3443,190 @@ pub mod rpc_full {
         solana_message::{SanitizedVersionedMessage, VersionedMessage},
         solana_transaction_status::{parse_ui_inner_instructions, UiLoadedAddresses},
     };
-    #[rpc]
-    pub trait Full {
-        type Metadata;
 
-        #[rpc(meta, name = "getInflationReward")]
-        fn get_inflation_reward(
+    /// RPC implementation for full API
+    pub struct FullRpcServer {
+        pub request_processor: JsonRpcRequestProcessor,
+    }
+
+    impl FullRpcServer {
+        pub fn new(request_processor: JsonRpcRequestProcessor) -> Self {
+            Self { request_processor }
+        }
+    }
+
+    #[rpc(server)]
+    pub trait FullApi {
+        #[method(name = "getInflationReward")]
+        async fn get_inflation_reward(
             &self,
-            meta: Self::Metadata,
             address_strs: Vec<String>,
             config: Option<RpcEpochConfig>,
-        ) -> BoxFuture<Result<Vec<Option<RpcInflationReward>>>>;
+        ) -> RpcResult<Vec<Option<RpcInflationReward>>>;
 
-        #[rpc(meta, name = "getClusterNodes")]
-        fn get_cluster_nodes(&self, meta: Self::Metadata) -> Result<Vec<RpcContactInfo>>;
+        #[method(name = "getClusterNodes")]
+        async fn get_cluster_nodes(&self) -> RpcResult<Vec<RpcContactInfo>>;
 
-        #[rpc(meta, name = "getRecentPerformanceSamples")]
-        fn get_recent_performance_samples(
+        #[method(name = "getRecentPerformanceSamples")]
+        async fn get_recent_performance_samples(
             &self,
-            meta: Self::Metadata,
             limit: Option<usize>,
-        ) -> Result<Vec<RpcPerfSample>>;
+        ) -> RpcResult<Vec<RpcPerfSample>>;
 
-        #[rpc(meta, name = "getSignatureStatuses")]
-        fn get_signature_statuses(
+        #[method(name = "getSignatureStatuses")]
+        async fn get_signature_statuses(
             &self,
-            meta: Self::Metadata,
             signature_strs: Vec<String>,
             config: Option<RpcSignatureStatusConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<Option<TransactionStatus>>>>>;
+        ) -> RpcResult<RpcResponse<Vec<Option<TransactionStatus>>>>;
 
-        #[rpc(meta, name = "getMaxRetransmitSlot")]
-        fn get_max_retransmit_slot(&self, meta: Self::Metadata) -> Result<Slot>;
+        #[method(name = "getMaxRetransmitSlot")]
+        async fn get_max_retransmit_slot(&self) -> RpcResult<Slot>;
 
-        #[rpc(meta, name = "getMaxShredInsertSlot")]
-        fn get_max_shred_insert_slot(&self, meta: Self::Metadata) -> Result<Slot>;
+        #[method(name = "getMaxShredInsertSlot")]
+        async fn get_max_shred_insert_slot(&self) -> RpcResult<Slot>;
 
-        #[rpc(meta, name = "requestAirdrop")]
-        fn request_airdrop(
+        #[method(name = "requestAirdrop")]
+        async fn request_airdrop(
             &self,
-            meta: Self::Metadata,
             pubkey_str: String,
             lamports: u64,
             config: Option<RpcRequestAirdropConfig>,
-        ) -> Result<String>;
+        ) -> RpcResult<String>;
 
-        #[rpc(meta, name = "sendTransaction")]
-        fn send_transaction(
+        #[method(name = "sendTransaction")]
+        async fn send_transaction(
             &self,
-            meta: Self::Metadata,
             data: String,
             config: Option<RpcSendTransactionConfig>,
-        ) -> Result<String>;
+        ) -> RpcResult<String>;
 
-        #[rpc(meta, name = "simulateTransaction")]
-        fn simulate_transaction(
+        #[method(name = "simulateTransaction")]
+        async fn simulate_transaction(
             &self,
-            meta: Self::Metadata,
             data: String,
             config: Option<RpcSimulateTransactionConfig>,
-        ) -> Result<RpcResponse<RpcSimulateTransactionResult>>;
+        ) -> RpcResult<RpcResponse<RpcSimulateTransactionResult>>;
 
-        #[rpc(meta, name = "minimumLedgerSlot")]
-        fn minimum_ledger_slot(&self, meta: Self::Metadata) -> Result<Slot>;
+        #[method(name = "minimumLedgerSlot")]
+        async fn minimum_ledger_slot(&self) -> RpcResult<Slot>;
 
-        #[rpc(meta, name = "getBlock")]
-        fn get_block(
+        #[method(name = "getBlock")]
+        async fn get_block(
             &self,
-            meta: Self::Metadata,
             slot: Slot,
             config: Option<RpcEncodingConfigWrapper<RpcBlockConfig>>,
-        ) -> BoxFuture<Result<Option<UiConfirmedBlock>>>;
+        ) -> RpcResult<Option<UiConfirmedBlock>>;
 
-        #[rpc(meta, name = "getBlockTime")]
-        fn get_block_time(
+        #[method(name = "getBlockTime")]
+        async fn get_block_time(
             &self,
-            meta: Self::Metadata,
             slot: Slot,
-        ) -> BoxFuture<Result<Option<UnixTimestamp>>>;
+        ) -> RpcResult<Option<UnixTimestamp>>;
 
-        #[rpc(meta, name = "getBlocks")]
-        fn get_blocks(
+        #[method(name = "getBlocks")]
+        async fn get_blocks(
             &self,
-            meta: Self::Metadata,
             start_slot: Slot,
             wrapper: Option<RpcBlocksConfigWrapper>,
             config: Option<RpcContextConfig>,
-        ) -> BoxFuture<Result<Vec<Slot>>>;
+        ) -> RpcResult<Vec<Slot>>;
 
-        #[rpc(meta, name = "getBlocksWithLimit")]
-        fn get_blocks_with_limit(
+        #[method(name = "getBlocksWithLimit")]
+        async fn get_blocks_with_limit(
             &self,
-            meta: Self::Metadata,
             start_slot: Slot,
             limit: usize,
             config: Option<RpcContextConfig>,
-        ) -> BoxFuture<Result<Vec<Slot>>>;
+        ) -> RpcResult<Vec<Slot>>;
 
-        #[rpc(meta, name = "getTransaction")]
-        fn get_transaction(
+        #[method(name = "getTransaction")]
+        async fn get_transaction(
             &self,
-            meta: Self::Metadata,
             signature_str: String,
             config: Option<RpcEncodingConfigWrapper<RpcTransactionConfig>>,
-        ) -> BoxFuture<Result<Option<EncodedConfirmedTransactionWithStatusMeta>>>;
+        ) -> RpcResult<Option<EncodedConfirmedTransactionWithStatusMeta>>;
 
-        #[rpc(meta, name = "getSignaturesForAddress")]
-        fn get_signatures_for_address(
+        #[method(name = "getSignaturesForAddress")]
+        async fn get_signatures_for_address(
             &self,
-            meta: Self::Metadata,
             address: String,
             config: Option<RpcSignaturesForAddressConfig>,
-        ) -> BoxFuture<Result<Vec<RpcConfirmedTransactionStatusWithSignature>>>;
+        ) -> RpcResult<Vec<RpcConfirmedTransactionStatusWithSignature>>;
 
-        #[rpc(meta, name = "getFirstAvailableBlock")]
-        fn get_first_available_block(&self, meta: Self::Metadata) -> BoxFuture<Result<Slot>>;
+        #[method(name = "getFirstAvailableBlock")]
+        async fn get_first_available_block(&self) -> RpcResult<Slot>;
 
-        #[rpc(meta, name = "getLatestBlockhash")]
-        fn get_latest_blockhash(
+        #[method(name = "getLatestBlockhash")]
+        async fn get_latest_blockhash(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<RpcBlockhash>>;
+        ) -> RpcResult<RpcResponse<RpcBlockhash>>;
 
-        #[rpc(meta, name = "isBlockhashValid")]
-        fn is_blockhash_valid(
+        #[method(name = "isBlockhashValid")]
+        async fn is_blockhash_valid(
             &self,
-            meta: Self::Metadata,
             blockhash: String,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<bool>>;
+        ) -> RpcResult<RpcResponse<bool>>;
 
-        #[rpc(meta, name = "getFeeForMessage")]
-        fn get_fee_for_message(
+        #[method(name = "getFeeForMessage")]
+        async fn get_fee_for_message(
             &self,
-            meta: Self::Metadata,
             data: String,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<Option<u64>>>;
+        ) -> RpcResult<RpcResponse<Option<u64>>>;
 
-        #[rpc(meta, name = "getStakeMinimumDelegation")]
-        fn get_stake_minimum_delegation(
+        #[method(name = "getStakeMinimumDelegation")]
+        async fn get_stake_minimum_delegation(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<u64>>;
+        ) -> RpcResult<RpcResponse<u64>>;
 
-        #[rpc(meta, name = "getRecentPrioritizationFees")]
-        fn get_recent_prioritization_fees(
+        #[method(name = "getRecentPrioritizationFees")]
+        async fn get_recent_prioritization_fees(
             &self,
-            meta: Self::Metadata,
             pubkey_strs: Option<Vec<String>>,
-        ) -> Result<Vec<RpcPrioritizationFee>>;
+        ) -> RpcResult<Vec<RpcPrioritizationFee>>;
     }
 
-    pub struct FullImpl;
-    impl Full for FullImpl {
-        type Metadata = JsonRpcRequestProcessor;
-
-        fn get_recent_performance_samples(
+    #[async_trait]
+    impl FullApiServer for FullRpcServer {
+        async fn get_recent_performance_samples(
             &self,
-            meta: Self::Metadata,
             limit: Option<usize>,
-        ) -> Result<Vec<RpcPerfSample>> {
+        ) -> RpcResult<Vec<RpcPerfSample>> {
             debug!("get_recent_performance_samples request received");
 
             let limit = limit.unwrap_or(PERFORMANCE_SAMPLES_LIMIT);
 
             if limit > PERFORMANCE_SAMPLES_LIMIT {
-                return Err(Error::invalid_params(format!(
-                    "Invalid limit; max {PERFORMANCE_SAMPLES_LIMIT}"
-                )));
+                return Err(ErrorObject::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!("Invalid limit; max {PERFORMANCE_SAMPLES_LIMIT}"),
+                    None::<()>,
+                ));
             }
 
-            Ok(meta
+            Ok(self.request_processor
                 .blockstore
                 .get_recent_perf_samples(limit)
                 .map_err(|err| {
                     warn!("get_recent_performance_samples failed: {err:?}");
-                    Error::invalid_request()
+                    ErrorObject::owned(
+                        ErrorCode::InvalidRequest.code(),
+                        "Invalid request".to_string(),
+                        None::<()>,
+                    )
                 })?
                 .into_iter()
                 .map(|(slot, sample)| rpc_perf_sample_from_perf_sample(slot, sample))
                 .collect())
         }
 
-        fn get_cluster_nodes(&self, meta: Self::Metadata) -> Result<Vec<RpcContactInfo>> {
+        async fn get_cluster_nodes(&self) -> RpcResult<Vec<RpcContactInfo>> {
             debug!("get_cluster_nodes rpc request received");
-            let cluster_info = &meta.cluster_info;
+            let cluster_info = &self.request_processor.cluster_info;
             let socket_addr_space = cluster_info.socket_addr_space();
             let my_shred_version = cluster_info.my_shred_version();
             Ok(cluster_info
@@ -3696,50 +3687,45 @@ pub mod rpc_full {
                 .collect())
         }
 
-        fn get_signature_statuses(
+        async fn get_signature_statuses(
             &self,
-            meta: Self::Metadata,
             signature_strs: Vec<String>,
             config: Option<RpcSignatureStatusConfig>,
-        ) -> BoxFuture<Result<RpcResponse<Vec<Option<TransactionStatus>>>>> {
+        ) -> RpcResult<RpcResponse<Vec<Option<TransactionStatus>>>> {
             debug!(
                 "get_signature_statuses rpc request received: {:?}",
                 signature_strs.len()
             );
             if signature_strs.len() > MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS {
-                return Box::pin(future::err(Error::invalid_params(format!(
-                    "Too many inputs provided; max {MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS}"
-                ))));
+                return Err(ErrorObject::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!("Too many inputs provided; max {MAX_GET_SIGNATURE_STATUSES_QUERY_ITEMS}"),
+                    None::<()>,
+                ));
             }
             let mut signatures: Vec<Signature> = vec![];
             for signature_str in signature_strs {
-                match verify_signature(&signature_str) {
-                    Ok(signature) => {
-                        signatures.push(signature);
-                    }
-                    Err(err) => return Box::pin(future::err(err)),
-                }
+                signatures.push(verify_signature(&signature_str)?);
             }
-            Box::pin(async move { meta.get_signature_statuses(signatures, config).await })
+            self.request_processor.get_signature_statuses(signatures, config).await
         }
 
-        fn get_max_retransmit_slot(&self, meta: Self::Metadata) -> Result<Slot> {
+        async fn get_max_retransmit_slot(&self) -> RpcResult<Slot> {
             debug!("get_max_retransmit_slot rpc request received");
-            Ok(meta.get_max_retransmit_slot())
+            Ok(self.request_processor.get_max_retransmit_slot())
         }
 
-        fn get_max_shred_insert_slot(&self, meta: Self::Metadata) -> Result<Slot> {
+        async fn get_max_shred_insert_slot(&self) -> RpcResult<Slot> {
             debug!("get_max_shred_insert_slot rpc request received");
-            Ok(meta.get_max_shred_insert_slot())
+            Ok(self.request_processor.get_max_shred_insert_slot())
         }
 
-        fn request_airdrop(
+        async fn request_airdrop(
             &self,
-            meta: Self::Metadata,
             pubkey_str: String,
             lamports: u64,
             config: Option<RpcRequestAirdropConfig>,
-        ) -> Result<String> {
+        ) -> RpcResult<String> {
             debug!("request_airdrop rpc request received");
             trace!(
                 "request_airdrop id={} lamports={} config: {:?}",
@@ -3748,11 +3734,17 @@ pub mod rpc_full {
                 &config
             );
 
-            let faucet_addr = meta.config.faucet_addr.ok_or_else(Error::invalid_request)?;
+            let faucet_addr = self.request_processor.config.faucet_addr.ok_or_else(|| {
+                ErrorObject::owned(
+                    ErrorCode::InvalidRequest.code(),
+                    "Invalid request".to_string(),
+                    None::<()>,
+                )
+            })?;
             let pubkey = verify_pubkey(&pubkey_str)?;
 
             let config = config.unwrap_or_default();
-            let bank = meta.bank(config.commitment);
+            let bank = self.request_processor.bank(config.commitment);
 
             let blockhash = if let Some(blockhash) = config.recent_blockhash {
                 verify_hash(&blockhash)?
@@ -3767,13 +3759,21 @@ pub mod rpc_full {
                 request_airdrop_transaction(&faucet_addr, &pubkey, lamports, blockhash).map_err(
                     |err| {
                         info!("request_airdrop_transaction failed: {err:?}");
-                        Error::internal_error()
+                        ErrorObject::owned(
+                            ErrorCode::InternalError.code(),
+                            "Internal error".to_string(),
+                            None::<()>,
+                        )
                     },
                 )?;
 
             let wire_transaction = serialize(&transaction).map_err(|err| {
                 info!("request_airdrop: serialize error: {err:?}");
-                Error::internal_error()
+                ErrorObject::owned(
+                    ErrorCode::InternalError.code(),
+                    "Internal error".to_string(),
+                    None::<()>,
+                )
             })?;
 
             let message_hash = transaction.message().hash();
@@ -3784,7 +3784,7 @@ pub mod rpc_full {
             };
 
             _send_transaction(
-                meta,
+                self.request_processor.clone(),
                 message_hash,
                 signature,
                 blockhash,
@@ -3795,12 +3795,11 @@ pub mod rpc_full {
             )
         }
 
-        fn send_transaction(
+        async fn send_transaction(
             &self,
-            meta: Self::Metadata,
             data: String,
             config: Option<RpcSendTransactionConfig>,
-        ) -> Result<String> {
+        ) -> RpcResult<String> {
             debug!("send_transaction rpc request received");
             let RpcSendTransactionConfig {
                 skip_preflight,
@@ -3811,9 +3810,7 @@ pub mod rpc_full {
             } = config.unwrap_or_default();
             let tx_encoding = encoding.unwrap_or(UiTransactionEncoding::Base58);
             let binary_encoding = tx_encoding.into_binary_encoding().ok_or_else(|| {
-                Error::invalid_params(format!(
-                    "unsupported encoding: {tx_encoding}. Supported encodings: base58, base64"
-                ))
+                ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("unsupported encoding: {tx_encoding}. Supported encodings: base58, base64"), None::<()>)
             })?;
             let (wire_transaction, unsanitized_tx) =
                 decode_and_deserialize::<VersionedTransaction>(data, binary_encoding)?;
@@ -3823,7 +3820,7 @@ pub mod rpc_full {
             } else {
                 preflight_commitment.map(|commitment| CommitmentConfig { commitment })
             };
-            let preflight_bank = &*meta.get_bank_with_config(RpcContextConfig {
+            let preflight_bank = &*self.request_processor.get_bank_with_config(RpcContextConfig {
                 commitment: preflight_commitment,
                 min_context_slot,
             })?;
@@ -3858,8 +3855,8 @@ pub mod rpc_full {
             if !skip_preflight {
                 let verification_error = transaction.verify().err();
 
-                if verification_error.is_none() && !meta.config.skip_preflight_health_check {
-                    match meta.health.check() {
+                if verification_error.is_none() && !self.request_processor.config.skip_preflight_health_check {
+                    match self.request_processor.health.check() {
                         RpcHealthStatus::Ok => (),
                         RpcHealthStatus::Unknown => {
                             inc_new_counter_info!("rpc-send-tx_health-unknown", 1);
@@ -3931,7 +3928,7 @@ pub mod rpc_full {
             }
 
             _send_transaction(
-                meta,
+                self.request_processor.clone(),
                 message_hash,
                 signature,
                 blockhash,
@@ -3942,12 +3939,11 @@ pub mod rpc_full {
             )
         }
 
-        fn simulate_transaction(
+        async fn simulate_transaction(
             &self,
-            meta: Self::Metadata,
             data: String,
             config: Option<RpcSimulateTransactionConfig>,
-        ) -> Result<RpcResponse<RpcSimulateTransactionResult>> {
+        ) -> RpcResult<RpcResponse<RpcSimulateTransactionResult>> {
             debug!("simulate_transaction rpc request received");
             let RpcSimulateTransactionConfig {
                 sig_verify,
@@ -3960,23 +3956,21 @@ pub mod rpc_full {
             } = config.unwrap_or_default();
             let tx_encoding = encoding.unwrap_or(UiTransactionEncoding::Base58);
             let binary_encoding = tx_encoding.into_binary_encoding().ok_or_else(|| {
-                Error::invalid_params(format!(
-                    "unsupported encoding: {tx_encoding}. Supported encodings: base58, base64"
-                ))
+                ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("unsupported encoding: {tx_encoding}. Supported encodings: base58, base64"), None::<()>)
             })?;
             let (_, mut unsanitized_tx) =
                 decode_and_deserialize::<VersionedTransaction>(data, binary_encoding)?;
 
-            let bank = &*meta.get_bank_with_config(RpcContextConfig {
+            let bank = &*self.request_processor.get_bank_with_config(RpcContextConfig {
                 commitment,
                 min_context_slot,
             })?;
             let mut blockhash: Option<RpcBlockhash> = None;
             if replace_recent_blockhash {
                 if sig_verify {
-                    return Err(Error::invalid_params(
-                        "sigVerify may not be used with replaceRecentBlockhash",
-                    ));
+                    return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+                        "sigVerify may not be used with replaceRecentBlockhash".to_string(),
+                        None::<()>));
                 }
                 let recent_blockhash = bank.last_blockhash();
                 unsanitized_tx
@@ -4037,13 +4031,11 @@ pub mod rpc_full {
                 if accounts_encoding == UiAccountEncoding::Binary
                     || accounts_encoding == UiAccountEncoding::Base58
                 {
-                    return Err(Error::invalid_params("base58 encoding not supported"));
+                    return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), "base58 encoding not supported", None::<()>));
                 }
 
                 if config_accounts.addresses.len() > number_of_accounts {
-                    return Err(Error::invalid_params(format!(
-                        "Too many accounts provided; max {number_of_accounts}"
-                    )));
+                    return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Too many accounts provided; max {number_of_accounts}"), None::<()>));
                 }
 
                 if result.is_err() {
@@ -4106,76 +4098,69 @@ pub mod rpc_full {
             ))
         }
 
-        fn minimum_ledger_slot(&self, meta: Self::Metadata) -> Result<Slot> {
+        async fn minimum_ledger_slot(&self) -> RpcResult<Slot> {
             debug!("minimum_ledger_slot rpc request received");
-            meta.minimum_ledger_slot()
+            self.request_processor.minimum_ledger_slot()
         }
 
-        fn get_block(
+        async fn get_block(
             &self,
-            meta: Self::Metadata,
             slot: Slot,
             config: Option<RpcEncodingConfigWrapper<RpcBlockConfig>>,
-        ) -> BoxFuture<Result<Option<UiConfirmedBlock>>> {
+        ) -> RpcResult<Option<UiConfirmedBlock>> {
             debug!("get_block rpc request received: {slot:?}");
-            Box::pin(async move { meta.get_block(slot, config).await })
+            self.request_processor.get_block(slot, config).await
         }
 
-        fn get_blocks(
+        async fn get_blocks(
             &self,
-            meta: Self::Metadata,
             start_slot: Slot,
             wrapper: Option<RpcBlocksConfigWrapper>,
             config: Option<RpcContextConfig>,
-        ) -> BoxFuture<Result<Vec<Slot>>> {
+        ) -> RpcResult<Vec<Slot>> {
             let (end_slot, maybe_config) =
                 wrapper.map(|wrapper| wrapper.unzip()).unwrap_or_default();
             debug!("get_blocks rpc request received: {start_slot}-{end_slot:?}");
-            Box::pin(async move {
-                meta.get_blocks(start_slot, end_slot, config.or(maybe_config))
-                    .await
-            })
+            
+            self.request_processor.get_blocks(start_slot, end_slot, config.or(maybe_config))
+                .await
         }
 
-        fn get_blocks_with_limit(
+        async fn get_blocks_with_limit(
             &self,
-            meta: Self::Metadata,
             start_slot: Slot,
             limit: usize,
             config: Option<RpcContextConfig>,
-        ) -> BoxFuture<Result<Vec<Slot>>> {
+        ) -> RpcResult<Vec<Slot>> {
             debug!("get_blocks_with_limit rpc request received: {start_slot}-{limit}",);
-            Box::pin(async move { meta.get_blocks_with_limit(start_slot, limit, config).await })
+            self.request_processor.get_blocks_with_limit(start_slot, limit, config).await
         }
 
-        fn get_block_time(
+        async fn get_block_time(
             &self,
-            meta: Self::Metadata,
             slot: Slot,
-        ) -> BoxFuture<Result<Option<UnixTimestamp>>> {
-            Box::pin(async move { meta.get_block_time(slot).await })
+        ) -> RpcResult<Option<UnixTimestamp>> {
+            self.request_processor.get_block_time(slot).await
         }
 
-        fn get_transaction(
+        async fn get_transaction(
             &self,
-            meta: Self::Metadata,
             signature_str: String,
             config: Option<RpcEncodingConfigWrapper<RpcTransactionConfig>>,
-        ) -> BoxFuture<Result<Option<EncodedConfirmedTransactionWithStatusMeta>>> {
+        ) -> RpcResult<Option<EncodedConfirmedTransactionWithStatusMeta>> {
             debug!("get_transaction rpc request received: {signature_str:?}");
             let signature = verify_signature(&signature_str);
             if let Err(err) = signature {
-                return Box::pin(future::err(err));
+                return Err(err);
             }
-            Box::pin(async move { meta.get_transaction(signature.unwrap(), config).await })
+            self.request_processor.get_transaction(signature.unwrap(), config).await
         }
 
-        fn get_signatures_for_address(
+        async fn get_signatures_for_address(
             &self,
-            meta: Self::Metadata,
             address: String,
             config: Option<RpcSignaturesForAddressConfig>,
-        ) -> BoxFuture<Result<Vec<RpcConfirmedTransactionStatusWithSignature>>> {
+        ) -> RpcResult<Vec<RpcConfirmedTransactionStatusWithSignature>> {
             let RpcSignaturesForAddressConfig {
                 before,
                 until,
@@ -4187,9 +4172,9 @@ pub mod rpc_full {
                 verify_and_parse_signatures_for_address_params(address, before, until, limit);
 
             match verification {
-                Err(err) => Box::pin(future::err(err)),
-                Ok((address, before, until, limit)) => Box::pin(async move {
-                    meta.get_signatures_for_address(
+                Err(err) => Err(err),
+                Ok((address, before, until, limit)) => 
+                    self.request_processor.get_signatures_for_address(
                         address,
                         before,
                         until,
@@ -4200,21 +4185,19 @@ pub mod rpc_full {
                         },
                     )
                     .await
-                }),
             }
         }
 
-        fn get_first_available_block(&self, meta: Self::Metadata) -> BoxFuture<Result<Slot>> {
+        async fn get_first_available_block(&self) -> RpcResult<Slot> {
             debug!("get_first_available_block rpc request received");
-            Box::pin(async move { Ok(meta.get_first_available_block().await) })
+            Ok(self.request_processor.get_first_available_block().await)
         }
 
-        fn get_inflation_reward(
+        async fn get_inflation_reward(
             &self,
-            meta: Self::Metadata,
             address_strs: Vec<String>,
             config: Option<RpcEpochConfig>,
-        ) -> BoxFuture<Result<Vec<Option<RpcInflationReward>>>> {
+        ) -> RpcResult<Vec<Option<RpcInflationReward>>> {
             debug!(
                 "get_inflation_reward rpc request received: {:?}",
                 address_strs.len()
@@ -4226,88 +4209,81 @@ pub mod rpc_full {
                     Ok(pubkey) => {
                         addresses.push(pubkey);
                     }
-                    Err(err) => return Box::pin(future::err(err)),
+                    Err(err) => return Err(err),
                 }
             }
 
-            Box::pin(async move { meta.get_inflation_reward(addresses, config).await })
+            self.request_processor.get_inflation_reward(addresses, config).await
         }
 
-        fn get_latest_blockhash(
+        async fn get_latest_blockhash(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<RpcBlockhash>> {
+        ) -> RpcResult<RpcResponse<RpcBlockhash>> {
             debug!("get_latest_blockhash rpc request received");
-            meta.get_latest_blockhash(config.unwrap_or_default())
+            self.request_processor.get_latest_blockhash(config.unwrap_or_default())
         }
 
-        fn is_blockhash_valid(
+        async fn is_blockhash_valid(
             &self,
-            meta: Self::Metadata,
             blockhash: String,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<bool>> {
+        ) -> RpcResult<RpcResponse<bool>> {
             let blockhash =
-                Hash::from_str(&blockhash).map_err(|e| Error::invalid_params(format!("{e:?}")))?;
-            meta.is_blockhash_valid(&blockhash, config.unwrap_or_default())
+                Hash::from_str(&blockhash).map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("{e:?}"), None::<()>))?;
+            self.request_processor.is_blockhash_valid(&blockhash, config.unwrap_or_default())
         }
 
-        fn get_fee_for_message(
+        async fn get_fee_for_message(
             &self,
-            meta: Self::Metadata,
             data: String,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<Option<u64>>> {
+        ) -> RpcResult<RpcResponse<Option<u64>>> {
             debug!("get_fee_for_message rpc request received");
             let (_, message) = decode_and_deserialize::<VersionedMessage>(
                 data,
                 TransactionBinaryEncoding::Base64,
             )?;
-            let bank = &*meta.get_bank_with_config(config.unwrap_or_default())?;
+            let bank = &*self.request_processor.get_bank_with_config(config.unwrap_or_default())?;
             let sanitized_versioned_message = SanitizedVersionedMessage::try_from(message)
                 .map_err(|err| {
-                    Error::invalid_params(format!("invalid transaction message: {err}"))
+                    ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("invalid transaction message: {err}"), None::<()>)
                 })?;
             let sanitized_message = SanitizedMessage::try_new(
                 sanitized_versioned_message,
                 bank,
                 bank.get_reserved_account_keys(),
             )
-            .map_err(|err| Error::invalid_params(format!("invalid transaction message: {err}")))?;
+            .map_err(|err| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("invalid transaction message: {err}"), None::<()>))?;
             let fee = bank.get_fee_for_message(&sanitized_message);
             Ok(new_response(bank, fee))
         }
 
-        fn get_stake_minimum_delegation(
+        async fn get_stake_minimum_delegation(
             &self,
-            meta: Self::Metadata,
             config: Option<RpcContextConfig>,
-        ) -> Result<RpcResponse<u64>> {
+        ) -> RpcResult<RpcResponse<u64>> {
             debug!("get_stake_minimum_delegation rpc request received");
-            meta.get_stake_minimum_delegation(config.unwrap_or_default())
+            self.request_processor.get_stake_minimum_delegation(config.unwrap_or_default())
         }
 
-        fn get_recent_prioritization_fees(
+        async fn get_recent_prioritization_fees(
             &self,
-            meta: Self::Metadata,
             pubkey_strs: Option<Vec<String>>,
-        ) -> Result<Vec<RpcPrioritizationFee>> {
+        ) -> RpcResult<Vec<RpcPrioritizationFee>> {
             let pubkey_strs = pubkey_strs.unwrap_or_default();
             debug!(
                 "get_recent_prioritization_fees rpc request received: {:?} pubkeys",
                 pubkey_strs.len()
             );
             if pubkey_strs.len() > MAX_TX_ACCOUNT_LOCKS {
-                return Err(Error::invalid_params(format!(
-                    "Too many inputs provided; max {MAX_TX_ACCOUNT_LOCKS}"
-                )));
+                return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Too many inputs provided; max {MAX_TX_ACCOUNT_LOCKS}"), None::<()>));
             }
             let pubkeys = pubkey_strs
                 .into_iter()
                 .map(|pubkey_str| verify_pubkey(&pubkey_str))
                 .collect::<Result<Vec<_>>>()?;
-            meta.get_recent_prioritization_fees(pubkeys)
+            self.request_processor.get_recent_prioritization_fees(pubkeys)
         }
     }
 }
@@ -4345,7 +4321,7 @@ const MAX_BASE64_SIZE: usize = 1644; // Golden, bump if PACKET_DATA_SIZE changes
 fn decode_and_deserialize<T>(
     encoded: String,
     encoding: TransactionBinaryEncoding,
-) -> Result<(Vec<u8>, T)>
+) -> RpcResult<(Vec<u8>, T)>
 where
     T: serde::de::DeserializeOwned,
 {
@@ -4353,41 +4329,41 @@ where
         TransactionBinaryEncoding::Base58 => {
             inc_new_counter_info!("rpc-base58_encoded_tx", 1);
             if encoded.len() > MAX_BASE58_SIZE {
-                return Err(Error::invalid_params(format!(
+                return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                     "base58 encoded {} too large: {} bytes (max: encoded/raw {}/{})",
                     type_name::<T>(),
                     encoded.len(),
                     MAX_BASE58_SIZE,
                     PACKET_DATA_SIZE,
-                )));
+                ), None::<()>));
             }
             bs58::decode(encoded)
                 .into_vec()
-                .map_err(|e| Error::invalid_params(format!("invalid base58 encoding: {e:?}")))?
+                .map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("invalid base58 encoding: {e:?}"), None::<()>))?
         }
         TransactionBinaryEncoding::Base64 => {
             inc_new_counter_info!("rpc-base64_encoded_tx", 1);
             if encoded.len() > MAX_BASE64_SIZE {
-                return Err(Error::invalid_params(format!(
+                return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                     "base64 encoded {} too large: {} bytes (max: encoded/raw {}/{})",
                     type_name::<T>(),
                     encoded.len(),
                     MAX_BASE64_SIZE,
                     PACKET_DATA_SIZE,
-                )));
+                ), None::<()>));
             }
             BASE64_STANDARD
                 .decode(encoded)
-                .map_err(|e| Error::invalid_params(format!("invalid base64 encoding: {e:?}")))?
+                .map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("invalid base64 encoding: {e:?}"), None::<()>))?
         }
     };
     if wire_output.len() > PACKET_DATA_SIZE {
-        return Err(Error::invalid_params(format!(
+        return Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
             "decoded {} too large: {} bytes (max: {} bytes)",
             type_name::<T>(),
             wire_output.len(),
             PACKET_DATA_SIZE
-        )));
+        ), None::<()>));
     }
     bincode::options()
         .with_limit(PACKET_DATA_SIZE as u64)
@@ -4395,11 +4371,11 @@ where
         .allow_trailing_bytes()
         .deserialize_from(&wire_output[..])
         .map_err(|err| {
-            Error::invalid_params(format!(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                 "failed to deserialize {}: {}",
                 type_name::<T>(),
                 &err.to_string()
-            ))
+            ), None::<()>)
         })
         .map(|output| (wire_output, output))
 }
@@ -4409,7 +4385,7 @@ fn sanitize_transaction(
     address_loader: impl AddressLoader,
     reserved_account_keys: &HashSet<Pubkey>,
     enable_static_instruction_limit: bool,
-) -> Result<RuntimeTransaction<SanitizedTransaction>> {
+) -> RpcResult<RuntimeTransaction<SanitizedTransaction>> {
     RuntimeTransaction::try_create(
         transaction,
         MessageHash::Compute,
@@ -4418,7 +4394,7 @@ fn sanitize_transaction(
         reserved_account_keys,
         enable_static_instruction_limit,
     )
-    .map_err(|err| Error::invalid_params(format!("invalid transaction: {err}")))
+    .map_err(|err| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("invalid transaction: {err}"), None::<()>))
 }
 
 pub fn create_validator_exit(exit: Arc<AtomicBool>) -> Arc<RwLock<Exit>> {
@@ -7071,7 +7047,7 @@ pub mod tests {
         let bad_pubkey = "a1b2c3d4";
         assert_eq!(
             verify_pubkey(bad_pubkey),
-            Err(Error::invalid_params("Invalid param: WrongSize"))
+            Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), "Invalid param: WrongSize", None::<()>))
         );
     }
 
@@ -7090,7 +7066,7 @@ pub mod tests {
         let bad_signature = "a1b2c3d4";
         assert_eq!(
             verify_signature(bad_signature),
-            Err(Error::invalid_params("Invalid param: WrongSize"))
+            Err(ErrorObject::owned(ErrorCode::InvalidParams.code(), "Invalid param: WrongSize", None::<()>))
         );
     }
 
@@ -9105,9 +9081,9 @@ pub mod tests {
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx58, TransactionBinaryEncoding::Base58)
                 .unwrap_err(),
-            Error::invalid_params(format!(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                 "base58 encoded solana_transaction::Transaction too large: {tx58_len} bytes (max: \
-                 encoded/raw {MAX_BASE58_SIZE}/{PACKET_DATA_SIZE})",
+                 encoded/raw {MAX_BASE58_SIZE}/{PACKET_DATA_SIZE}, None::<()>)",
             ))
         );
 
@@ -9116,9 +9092,9 @@ pub mod tests {
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx64, TransactionBinaryEncoding::Base64)
                 .unwrap_err(),
-            Error::invalid_params(format!(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                 "base64 encoded solana_transaction::Transaction too large: {tx64_len} bytes (max: \
-                 encoded/raw {MAX_BASE64_SIZE}/{PACKET_DATA_SIZE})",
+                 encoded/raw {MAX_BASE64_SIZE}/{PACKET_DATA_SIZE}, None::<()>)",
             ))
         );
 
@@ -9128,9 +9104,9 @@ pub mod tests {
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx58, TransactionBinaryEncoding::Base58)
                 .unwrap_err(),
-            Error::invalid_params(format!(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                 "decoded solana_transaction::Transaction too large: {too_big} bytes (max: \
-                 {PACKET_DATA_SIZE} bytes)"
+                 {PACKET_DATA_SIZE} bytes, None::<()>)"
             ))
         );
 
@@ -9138,9 +9114,9 @@ pub mod tests {
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx64, TransactionBinaryEncoding::Base64)
                 .unwrap_err(),
-            Error::invalid_params(format!(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), format!(
                 "decoded solana_transaction::Transaction too large: {too_big} bytes (max: \
-                 {PACKET_DATA_SIZE} bytes)"
+                 {PACKET_DATA_SIZE} bytes, None::<()>)"
             ))
         );
 
@@ -9149,10 +9125,10 @@ pub mod tests {
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx64.clone(), TransactionBinaryEncoding::Base64)
                 .unwrap_err(),
-            Error::invalid_params(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), 
                 "failed to deserialize solana_transaction::Transaction: invalid value: continue \
                  signal on byte-three, expected a terminal signal on or before byte-three"
-                    .to_string()
+                    .to_string(), None::<()>
             )
         );
 
@@ -9160,17 +9136,17 @@ pub mod tests {
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx64, TransactionBinaryEncoding::Base64)
                 .unwrap_err(),
-            Error::invalid_params("invalid base64 encoding: InvalidByte(1640, 33)".to_string())
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), "invalid base64 encoding: InvalidByte(1640, 33, None::<()>)".to_string())
         );
 
         let mut tx58 = bs58::encode(&tx_ser).into_string();
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx58.clone(), TransactionBinaryEncoding::Base58)
                 .unwrap_err(),
-            Error::invalid_params(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), 
                 "failed to deserialize solana_transaction::Transaction: invalid value: continue \
                  signal on byte-three, expected a terminal signal on or before byte-three"
-                    .to_string()
+                    .to_string(), None::<()>
             )
         );
 
@@ -9178,9 +9154,9 @@ pub mod tests {
         assert_eq!(
             decode_and_deserialize::<Transaction>(tx58, TransactionBinaryEncoding::Base58)
                 .unwrap_err(),
-            Error::invalid_params(
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), 
                 "invalid base58 encoding: InvalidCharacter { character: '!', index: 1680 }"
-                    .to_string(),
+                    .to_string(), None::<()>,
             )
         );
     }
@@ -9199,9 +9175,9 @@ pub mod tests {
         )
         .unwrap()
         .1;
-        let expect58 = Error::invalid_params(
+        let expect58 = ErrorObject::owned(ErrorCode::InvalidParams.code(), 
             "invalid transaction: Transaction failed to sanitize accounts offsets correctly"
-                .to_string(),
+                .to_string(), None::<()>,
         );
         assert_eq!(
             sanitize_transaction(
@@ -9237,8 +9213,8 @@ pub mod tests {
                 true,
             )
             .unwrap_err(),
-            Error::invalid_params(
-                "invalid transaction: Transaction version is unsupported".to_string(),
+            ErrorObject::owned(ErrorCode::InvalidParams.code(), 
+                "invalid transaction: Transaction version is unsupported".to_string(), None::<()>,
             )
         );
     }

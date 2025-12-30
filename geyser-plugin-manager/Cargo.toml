@@ -20,7 +20,7 @@ agave-geyser-plugin-interface = { workspace = true }
 bs58 = { workspace = true }
 crossbeam-channel = { workspace = true }
 json5 = { workspace = true }
-jsonrpc-core = { workspace = true }
+jsonrpsee-types = { workspace = true }
 libloading = { workspace = true }
 log = { workspace = true }
 serde_json = { workspace = true }

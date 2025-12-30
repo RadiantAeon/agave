@@ -279,9 +279,16 @@ struct NotificationParams<T> {
     subscription: SubscriptionId,
 }
 
+/// JSON-RPC version for serialization
+#[derive(Debug, Serialize)]
+pub enum JsonRpcVersion {
+    #[serde(rename = "2.0")]
+    V2,
+}
+
 #[derive(Debug, Serialize)]
 struct Notification<T> {
-    jsonrpc: Option<jsonrpc_core::Version>,
+    jsonrpc: Option<JsonRpcVersion>,
     method: &'static str,
     params: NotificationParams<T>,
 }
@@ -295,7 +302,7 @@ impl RpcNotifier {
             let mut buf = buf.borrow_mut();
             buf.clear();
             let notification = Notification {
-                jsonrpc: Some(jsonrpc_core::Version::V2),
+                jsonrpc: Some(JsonRpcVersion::V2),
                 method: subscription.method(),
                 params: NotificationParams {
                     result: value,
