@@ -2433,17 +2433,6 @@ pub fn verify_pubkey(input: &str) -> RpcResult<Pubkey> {
         .map_err(|e| ErrorObject::owned(ErrorCode::InvalidParams.code(), format!("Invalid param: {e:?}"), None::<()>))
 }
 
-/// Legacy verify_pubkey for IPC admin RPC (uses jsonrpc_core error types)
-pub fn verify_pubkey_legacy(input: &str) -> jsonrpc_core::Result<Pubkey> {
-    input
-        .parse()
-        .map_err(|e| jsonrpc_core::Error {
-            code: jsonrpc_core::ErrorCode::InvalidParams,
-            message: format!("Invalid param: {e:?}"),
-            data: None,
-        })
-}
-
 fn verify_hash(input: &str) -> RpcResult<Hash> {
     input
         .parse()
@@ -4501,8 +4490,6 @@ pub mod tests {
         },
         agave_reserved_account_keys::ReservedAccountKeys,
         bincode::deserialize,
-        jsonrpc_core::{futures, ErrorCode, MetaIoHandler, Output, Response, Value},
-        jsonrpc_core_client::transports::local,
         serde::de::DeserializeOwned,
         solana_account::{state_traits::StateMut, Account},
         solana_accounts_db::accounts_db::{AccountsDbConfig, ACCOUNTS_DB_CONFIG_FOR_TESTING},
@@ -4604,7 +4591,7 @@ pub mod tests {
         })
     }
 
-    fn parse_success_result<T: DeserializeOwned>(response: Response) -> T {
+    fn parse_success_result<T: DeserializeOwned>(response: Response<T>) -> T {
         if let Response::Single(output) = response {
             match output {
                 Output::Success(success) => serde_json::from_value(success.result).unwrap(),
@@ -8776,8 +8763,8 @@ pub mod tests {
                 RpcFilterType::DataSize(165)
             ],
         )
-        .is_err_and(|err| err.code == ErrorCode::InvalidParams
-            && err.message == "Incorrect byte length 16 for SPL token owner filter, expected 32"));
+        .is_err_and(|err| err.code() == ErrorCode::InvalidParams
+            && err.message() == "Incorrect byte length 16 for SPL token owner filter, expected 32"));
     }
 
     #[test]
