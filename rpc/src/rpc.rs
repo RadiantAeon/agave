@@ -11,7 +11,7 @@ use {
     base64::{prelude::BASE64_STANDARD, Engine},
     bincode::{config::Options, serialize},
     crossbeam_channel::{unbounded, Receiver, Sender},
-    futures::future::{self, FutureExt, OptionFuture},
+    futures::future::OptionFuture,
     jsonrpsee::{
         core::async_trait,
         proc_macros::rpc,

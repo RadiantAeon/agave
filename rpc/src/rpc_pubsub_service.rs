@@ -9,7 +9,6 @@ use {
         rpc_subscriptions::{RpcNotification, RpcSubscriptions},
     },
     dashmap::{mapref::entry::Entry, DashMap},
-    jsonrpsee::RpcModule,
     soketto::handshake::{server, Server},
     solana_metrics::TokenCounter,
     solana_rayon_threadlimit::get_thread_count,
